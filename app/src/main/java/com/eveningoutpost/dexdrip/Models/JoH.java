@@ -6,39 +6,50 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothManager;
+import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.Signature;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.Point;
 import android.media.AudioManager;
 import android.media.RingtoneManager;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.net.Uri;
+import android.net.wifi.WifiInfo;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.PowerManager;
 import android.provider.Settings;
-import android.support.v7.app.AppCompatActivity;
 import android.support.v4.app.NotificationCompat;
+import android.support.v7.app.AppCompatActivity;
 import android.text.InputType;
 import android.text.method.DigitsKeyListener;
 import android.util.Base64;
 import android.util.Log;
 import android.view.Display;
 import android.view.Surface;
+import android.view.View;
 import android.widget.Toast;
 
 import com.eveningoutpost.dexdrip.Home;
 import com.eveningoutpost.dexdrip.R;
+import com.eveningoutpost.dexdrip.UtilityModels.PersistentStore;
 import com.eveningoutpost.dexdrip.xdrip;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.UnsupportedEncodingException;
 import java.lang.reflect.Field;
 import java.net.URLEncoder;
@@ -56,6 +67,8 @@ import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 import java.util.zip.Inflater;
 
+import static com.eveningoutpost.dexdrip.stats.StatsActivity.SHOW_STATISTICS_PRINT_COLOR;
+
 /**
  * Created by jamorham on 06/01/16.
  * <p>
@@ -68,7 +81,7 @@ public class JoH {
 
     private static double benchmark_time = 0;
     private static Map<String, Double> benchmarks = new HashMap<String, Double>();
-    private static final Map<String, Double> rateLimits = new HashMap<String, Double>();
+    private static final Map<String, Long> rateLimits = new HashMap<String, Long>();
 
     // qs = quick string conversion of double for printing
     public static String qs(double x) {
@@ -100,8 +113,13 @@ public class JoH {
         return new Date().getTime();
     }
 
+    // TODO can we optimize this with System.currentTimeMillis ?
     public static long tsl() {
         return new Date().getTime();
+    }
+
+    public static long msSince(long when) {
+        return (tsl() - when);
     }
 
     public static String bytesToHex(byte[] bytes) {
@@ -228,6 +246,15 @@ public class JoH {
         }
     }
 
+    public static String base64decode(String input) {
+        try {
+            return new String(Base64.decode(input.getBytes("UTF-8"), Base64.NO_WRAP), "UTF-8");
+        } catch (UnsupportedEncodingException e) {
+            Log.e(TAG, "Got unsupported encoding: " + e);
+            return "decode-error";
+        }
+    }
+
     public static String ucFirst(String input) {
         return input.substring(0, 1).toUpperCase() + input.substring(1).toLowerCase();
     }
@@ -293,27 +320,47 @@ public class JoH {
         }
     }
 
-    // return true if below rate limit
-    public static synchronized boolean ratelimit(String name, int seconds) {
+    // return true if below rate limit (persistent version)
+    public static synchronized boolean pratelimit(String name, int seconds) {
         // check if over limit
-        if ((rateLimits.containsKey(name)) && (JoH.ts() - rateLimits.get(name) < (seconds * 1000))) {
+        final long time_now = JoH.tsl();
+        final long rate_time;
+        if (!rateLimits.containsKey(name)) {
+            rate_time = PersistentStore.getLong(name); // 0 if undef
+        } else {
+            rate_time = rateLimits.get(name);
+        }
+        if ((rate_time > 0) && (time_now - rate_time) < (seconds * 1000)) {
             Log.d(TAG, name + " rate limited: " + seconds + " seconds");
             return false;
         }
         // not over limit
-        rateLimits.put(name, JoH.ts());
+        rateLimits.put(name, time_now);
+        PersistentStore.setLong(name, time_now);
+        return true;
+    }
+
+    // return true if below rate limit
+    public static synchronized boolean ratelimit(String name, int seconds) {
+        // check if over limit
+        if ((rateLimits.containsKey(name)) && (JoH.tsl() - rateLimits.get(name) < (seconds * 1000))) {
+            Log.d(TAG, name + " rate limited: " + seconds + " seconds");
+            return false;
+        }
+        // not over limit
+        rateLimits.put(name, JoH.tsl());
         return true;
     }
 
     // return true if below rate limit
     public static synchronized boolean ratelimitmilli(String name, int milliseconds) {
         // check if over limit
-        if ((rateLimits.containsKey(name)) && (JoH.ts() - rateLimits.get(name) < (milliseconds))) {
+        if ((rateLimits.containsKey(name)) && (JoH.tsl() - rateLimits.get(name) < (milliseconds))) {
             Log.d(TAG, name + " rate limited: " + milliseconds + " milliseconds");
             return false;
         }
         // not over limit
-        rateLimits.put(name, JoH.ts());
+        rateLimits.put(name, JoH.tsl());
         return true;
     }
 
@@ -394,8 +441,16 @@ public class JoH {
         return sd.format(date);
     }
 
+    public static String hourMinuteString(long timestamp) {
+        return android.text.format.DateFormat.format("HH:mm", timestamp).toString();
+    }
+
     public static String dateTimeText(long timestamp) {
         return android.text.format.DateFormat.format("yyyy-MM-dd HH:mm:ss", timestamp).toString();
+    }
+
+    public static String dateText(long timestamp) {
+        return android.text.format.DateFormat.format("yyyy-MM-dd", timestamp).toString();
     }
 
     public static double tolerantParseDouble(String str) throws NumberFormatException {
@@ -460,6 +515,51 @@ public class JoH {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    public static String getWifiSSID() {
+        try {
+            final WifiManager wifi_manager = (WifiManager) xdrip.getAppContext().getSystemService(Context.WIFI_SERVICE);
+            if (wifi_manager.isWifiEnabled()) {
+                final WifiInfo wifiInfo = wifi_manager.getConnectionInfo();
+                if (wifiInfo != null) {
+                    final NetworkInfo.DetailedState wifi_state = WifiInfo.getDetailedStateOf(wifiInfo.getSupplicantState());
+                    if (wifi_state == NetworkInfo.DetailedState.CONNECTED
+                            || wifi_state == NetworkInfo.DetailedState.OBTAINING_IPADDR
+                            || wifi_state == NetworkInfo.DetailedState.CAPTIVE_PORTAL_CHECK) {
+                        String ssid = wifiInfo.getSSID();
+                        if (ssid.equals("<unknown ssid>")) return null; // WifiSsid.NONE;
+                        if (ssid.charAt(0)=='"') ssid=ssid.substring(1);
+                        if (ssid.charAt(ssid.length()-1)=='"') ssid=ssid.substring(0,ssid.length()-1);
+                        return ssid;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Got exception in getWifiSSID: " + e);
+        }
+        return null;
+    }
+
+    public static boolean getWifiFuzzyMatch(String local, String remote) {
+        if ((local == null) || (remote == null) || (local.length() == 0) || (remote.length() == 0))
+            return false;
+        final int slen = Math.min(local.length(), remote.length());
+        final int llen = Math.max(local.length(), remote.length());
+        int matched = 0;
+        for (int i = 0; i < slen; i++) {
+            if (local.charAt(i) == (remote.charAt(i))) matched++;
+        }
+        boolean result = false;
+        if (matched == slen) result = true; // shorter string is substring
+        final double quota = (double) matched / (double) llen;
+        final int dmatch = llen - matched;
+        if (slen > 2) {
+            if (dmatch < 3) result = true;
+            if (quota > 0.80) result = true;
+        }
+        //Log.d(TAG, "l:" + local + " r:" + remote + " slen:" + slen + " llen:" + llen + " matched:" + matched + "  q:" + JoH.qs(quota, 2) + "  dm:" + dmatch + " RESULT: " + result);
+        return result;
     }
 
     public static boolean runOnUiThread(Runnable theRunnable) {
@@ -527,6 +627,126 @@ public class JoH {
             return null;
         }
     }
+
+    public static void goFullScreen(boolean fullScreen, View decorView) {
+
+        if (fullScreen) {
+            if (Build.VERSION.SDK_INT >= 19) {
+                decorView.setSystemUiVisibility(
+                        View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                                | View.SYSTEM_UI_FLAG_FULLSCREEN
+                                | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+            } else {
+                decorView.setSystemUiVisibility(
+                        View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                                | View.SYSTEM_UI_FLAG_FULLSCREEN);
+            }
+        } else {
+            decorView.setSystemUiVisibility(0); // TODO will this need revisiting in later android vers?
+        }
+    }
+
+
+    public static Bitmap screenShot(View view, String annotation) {
+
+        if (view == null) {
+            static_toast_long("View is null in screenshot!");
+            return null;
+        }
+        final int width = view.getWidth();
+        final int height = view.getHeight();
+        Log.d(TAG, "Screenshot called: " + width + "," + height);
+        final Bitmap bitmap = Bitmap.createBitmap(width,
+                height, Bitmap.Config.ARGB_8888);
+
+        final Canvas canvas = new Canvas(bitmap);
+        if (Home.getPreferencesBooleanDefaultFalse(SHOW_STATISTICS_PRINT_COLOR)) {
+            Paint paint = new Paint();
+            paint.setColor(Color.WHITE);
+            paint.setStyle(Paint.Style.FILL);
+            canvas.drawRect(0, 0, width, height, paint);
+        }
+
+
+        view.destroyDrawingCache();
+        view.layout(0, 0, width, height);
+        view.draw(canvas);
+
+        if (annotation != null) {
+            final int offset = (annotation != null) ? 40 : 0;
+            final Bitmap bitmapf = Bitmap.createBitmap(width,
+                    height + offset, Bitmap.Config.ARGB_8888);
+            final Canvas canvasf = new Canvas(bitmapf);
+
+            Paint paint = new Paint();
+            if (Home.getPreferencesBooleanDefaultFalse(SHOW_STATISTICS_PRINT_COLOR)) {
+                paint.setColor(Color.WHITE);
+                paint.setStyle(Paint.Style.FILL);
+                canvasf.drawRect(0, 0, width, offset, paint);
+                paint.setColor(Color.BLACK);
+            } else {
+                paint.setColor(Color.GRAY);
+            }
+            paint.setTextSize(20);
+            // paint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.SRC_OUT));
+            canvasf.drawBitmap(bitmap, 0, offset, paint);
+            canvasf.drawText(annotation, 50, (offset / 2) + 5, paint);
+            bitmap.recycle();
+            return bitmapf;
+        }
+
+        return bitmap;
+    }
+
+    public static Bitmap screenShot2(View view) {
+        Log.d(TAG, "Screenshot2 called: " + view.getWidth() + "," + view.getHeight());
+        view.setDrawingCacheEnabled(true);
+        view.buildDrawingCache(true);
+        final Bitmap bitmap = view.getDrawingCache(true);
+        return bitmap;
+    }
+
+
+    public static void bitmapToFile(Bitmap bitmap, String path, String fileName) {
+
+        if (bitmap == null) return;
+        Log.d(TAG, "bitmapToFile: " + bitmap.getWidth() + "x" + bitmap.getHeight());
+        File dir = new File(path);
+        if (!dir.exists())
+            dir.mkdirs();
+        final File file = new File(path, fileName);
+        try {
+            FileOutputStream output = new FileOutputStream(file);
+            final boolean result = bitmap.compress(Bitmap.CompressFormat.PNG, 80, output);
+            output.flush();
+            output.close();
+            Log.d(TAG, "Bitmap compress result: " + result);
+        } catch (Exception e) {
+            Log.e(TAG, "Got exception writing bitmap to file: " + e);
+        }
+    }
+
+    public static void shareImage(Context context, File file) {
+        Uri uri = Uri.fromFile(file);
+        final Intent intent = new Intent();
+        intent.setAction(Intent.ACTION_SEND);
+        intent.setType("image/*");
+        intent.putExtra(android.content.Intent.EXTRA_SUBJECT, "");
+        intent.putExtra(android.content.Intent.EXTRA_TEXT, "");
+        intent.putExtra(Intent.EXTRA_STREAM, uri);
+        try {
+            context.startActivity(Intent.createChooser(intent, "Share"));
+        } catch (ActivityNotFoundException e) {
+            static_toast_long("No suitable app to show an image!");
+        }
+    }
+
 
     public static void showNotification(String title, String content, PendingIntent intent, int notificationId, boolean sound, boolean vibrate, boolean onetime) {
         final NotificationCompat.Builder mBuilder = notificationBuilder(title, content, intent);
@@ -601,8 +821,18 @@ public class JoH {
         }
     }
 
+    public static boolean isAirplaneModeEnabled(Context context) {
+        return Settings.Global.getInt(context.getContentResolver(), Settings.Global.AIRPLANE_MODE_ON, 0) != 0;
+    }
+
     public synchronized static void setBluetoothEnabled(Context context, boolean state) {
         try {
+
+            if (isAirplaneModeEnabled(context)) {
+                UserError.Log.e(TAG, "Not setting bluetooth to state: " + state + " due to airplane mode being enabled");
+                return;
+            }
+
             if (android.os.Build.VERSION.SDK_INT > Build.VERSION_CODES.JELLY_BEAN_MR2) {
 
                 final BluetoothManager bluetoothManager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);

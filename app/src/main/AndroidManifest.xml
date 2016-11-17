@@ -30,13 +30,14 @@
     <uses-permission android:name="com.google.android.c2dm.permission.RECEIVE" />
     <uses-permission android:name="com.google.android.gms.permission.ACTIVITY_RECOGNITION" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.GET_ACCOUNTS" />
     <uses-permission android:name="android.permission.MANAGE_ACCOUNTS" />
     <uses-permission android:name="android.permission.USE_CREDENTIALS" />
 
     <application
         android:name=".xdrip"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
         android:label="@string/app_name"
         android:largeHeap="true"
@@ -137,6 +138,10 @@
             android:name=".PhoneKeypadInputActivity"
             android:label="Keypad Input"
             android:theme="@style/PopUpKeypad" />
+
+        <activity
+            android:name=".NoteSearch"
+            android:label="Note Search" />
 
         <receiver android:name=".AutoStart">
             <intent-filter>
@@ -307,6 +312,7 @@
 
         <activity
             android:name=".AlertList"
+            android:configChanges="orientation|screenSize"
             android:label="@string/title_activity_alert_list" />
         <activity
             android:name=".ErrorsActivity"
@@ -351,7 +357,7 @@
             </intent-filter>
         </activity>
 
-        <receiver android:name=".NSClientReceiver">
+        <!--receiver android:name=".NSClientReceiver">
             <intent-filter>
                 <action android:name="info.nightscout.client.NEW_SGV" />
             </intent-filter>
@@ -372,7 +378,7 @@
             <intent-filter>
                 <action android:name="com.eveningoutpost.dexdrip.FROM_LIBRE_ALARM" />
             </intent-filter>
-        </receiver>
+        </receiver -->
         <receiver
             android:name=".localeTasker.receiver.FireReceiver"
             android:exported="true"

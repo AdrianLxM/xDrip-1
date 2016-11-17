@@ -71,6 +71,7 @@ import com.eveningoutpost.dexdrip.UtilityModels.SendFeedBack;
 import com.eveningoutpost.dexdrip.UtilityModels.ShotStateStore;
 import com.eveningoutpost.dexdrip.UtilityModels.UndoRedo;
 import com.eveningoutpost.dexdrip.UtilityModels.UpdateActivity;
+import com.eveningoutpost.dexdrip.calibrations.CalibrationAbstract;
 import com.eveningoutpost.dexdrip.languageeditor.LanguageEditor;
 import com.eveningoutpost.dexdrip.stats.StatsResult;
 import com.eveningoutpost.dexdrip.utils.ActivityWithMenu;
@@ -112,6 +113,7 @@ import lecho.lib.hellocharts.view.PreviewLineChartView;
 
 import static com.eveningoutpost.dexdrip.UtilityModels.ColorCache.X;
 import static com.eveningoutpost.dexdrip.UtilityModels.ColorCache.getCol;
+import static com.eveningoutpost.dexdrip.calibrations.PluggableCalibration.getCalibrationPluginFromPreferences;
 
 
 public class Home extends ActivityWithMenu {
@@ -121,6 +123,7 @@ public class Home extends ActivityWithMenu {
     public final static String CREATE_TREATMENT_NOTE = "CREATE_TREATMENT_NOTE";
     public final static String HOME_FULL_WAKEUP = "HOME_FULL_WAKEUP";
     public final static String GCM_RESOLUTION_ACTIVITY = "GCM_RESOLUTION_ACTIVITY";
+    public final static String SNOOZE_CONFIRM_DIALOG = "SNOOZE_CONFIRM_DIALOG";
     public static String menu_name = "Home Screen";
     public static boolean activityVisible = false;
     public static boolean invalidateMenu = false;
@@ -157,12 +160,13 @@ public class Home extends ActivityWithMenu {
     private TextView textBloodGlucose;
     private TextView textInsulinDose;
     private TextView textTime;
-    private final int REQ_CODE_SPEECH_INPUT = 1994;
-    private final int REQ_CODE_SPEECH_NOTE_INPUT = 1995;
-    private final int SHOWCASE_UNDO = 4;
-    private final int SHOWCASE_REDO = 5;
-    private final int SHOWCASE_NOTE_LONG = 6;
-    private final int SHOWCASE_VARIANT = 7;
+    private static final int REQ_CODE_SPEECH_INPUT = 1994;
+    private static final int REQ_CODE_SPEECH_NOTE_INPUT = 1995;
+    private static final int SHOWCASE_UNDO = 4;
+    private static final int SHOWCASE_REDO = 5;
+    private static final int SHOWCASE_NOTE_LONG = 6;
+    private static final int SHOWCASE_VARIANT = 7;
+    public static final int SHOWCASE_STATISTICS = 8;
     private static double last_speech_time = 0;
     private PreviewLineChartView previewChart;
     private TextView dexbridgeBattery;
@@ -472,21 +476,72 @@ public class Home extends ActivityWithMenu {
     }
 
     // handle sending the intent
-    private void processCalibrationNoUI(double glucosenumber, double timeoffset) {
-        if (timeoffset < 0) {
-            toaststaticnext("Got calibration in the future - cannot process!");
-            return;
-        }
-        if (glucosenumber > 0) {
-            Intent calintent = new Intent(getApplicationContext(), AddCalibration.class);
-            // TODO fix up class names
-            //calintent.setClassName("com.eveningoutpost.dexdrip", "com.eveningoutpost.dexdrip.AddCalibration");
-            calintent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            calintent.putExtra("bg_string", JoH.qs(glucosenumber));
-            calintent.putExtra("bg_age", Long.toString((long) (glucosenumber / 1000)));
-            getApplicationContext().startActivity(calintent);
-            Log.d(TAG, "ProcessCalibrationNoUI number: " + glucosenumber + " offset: " + timeoffset);
-        }
+    private void processCalibrationNoUI(final double glucosenumber, final double timeoffset) {
+
+                if (timeoffset < 0) {
+                    toaststaticnext("Got calibration in the future - cannot process!");
+                    return;
+                }
+                if (glucosenumber > 0) {
+                    final Intent calintent = new Intent(getApplicationContext(), AddCalibration.class);
+
+                    calintent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    calintent.putExtra("bg_string", JoH.qs(glucosenumber));
+                    calintent.putExtra("bg_age", Long.toString((long) (timeoffset / 1000)));
+                    calintent.putExtra("allow_undo", "true");
+                    Log.d(TAG, "ProcessCalibrationNoUI number: " + glucosenumber + " offset: " + timeoffset);
+
+                    final String calibration_type = getPreferencesStringWithDefault("treatment_fingerstick_calibration_usage","ask");
+                    if (calibration_type.equals("ask"))
+                    {
+                        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+                        builder.setTitle("Use BG for Calibration?");
+                        builder.setMessage("Do you want to use this entered finger-stick blood glucose test to calibrate with?\n\n(you can change when this dialog is displayed in Settings)");
+
+                        builder.setPositiveButton("YES, Calibrate", new DialogInterface.OnClickListener() {
+                            public void onClick(DialogInterface dialog, int which) {
+                                calintent.putExtra("note_only","false");
+                                startIntentThreadWithDelayedRefresh(calintent);
+                                dialog.dismiss();
+                            }
+                        });
+
+                        builder.setNegativeButton("NO", new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int which) {
+                                calintent.putExtra("note_only","true");
+                                startIntentThreadWithDelayedRefresh(calintent);
+                                dialog.dismiss();
+                            }
+                        });
+
+                        AlertDialog alert = builder.create();
+                        alert.show();
+
+                    } else {
+                        // if use for calibration == "no" then this is a "note_only" type, otherwise it isn't
+                        calintent.putExtra("note_only", calibration_type.equals("never") ? "true" : "false");
+                        startIntentThreadWithDelayedRefresh(calintent);
+                    }
+                }
+    }
+
+    private void startIntentThreadWithDelayedRefresh(final Intent intent)
+    {
+        new Thread() {
+            @Override
+            public void run() {
+                getApplicationContext().startActivity(intent);
+                staticRefreshBGCharts();
+            }
+        }.start();
+
+        JoH.runOnUiThreadDelayed(new Runnable() {
+            @Override
+            public void run() {
+                staticRefreshBGCharts();
+            }
+        }, 4000);
     }
 
     private void processCalibration() {
@@ -522,14 +577,8 @@ public class Home extends ActivityWithMenu {
         if (hideTreatmentButtonsIfAllDone()) {
             updateCurrentBgInfo("approve button");
         }
-        new Thread() {
-            @Override
-            public void run() {
-                // possibly this should have some delay
-                processCalibrationNoUI(myglucosenumber, mytimeoffset);
-                staticRefreshBGCharts();
-            }
-        }.start();
+        processCalibrationNoUI(myglucosenumber, mytimeoffset);
+        staticRefreshBGCharts();
     }
 
     private void processIncomingBundle(Bundle bundle) {
@@ -577,6 +626,8 @@ public class Home extends ActivityWithMenu {
                 }
             } else if (bundle.getString(Home.GCM_RESOLUTION_ACTIVITY) != null) {
                 GcmActivity.checkPlayServices(this, this);
+            } else if (bundle.getString(Home.SNOOZE_CONFIRM_DIALOG) != null) {
+                GcmActivity.sendSnoozeToRemoteWithConfirm(this);
             }
         }
     }
@@ -956,7 +1007,7 @@ public class Home extends ActivityWithMenu {
 
             case "time":
                 Log.d(TAG, "processing time keyword");
-                if ((timeset == false) && (thisnumber > 0)) {
+                if ((timeset == false) && (thisnumber >= 0)) {
 
                     final NumberFormat nf = NumberFormat.getNumberInstance(Locale.US);
                     final DecimalFormat df = (DecimalFormat)nf;
@@ -971,7 +1022,7 @@ public class Home extends ActivityWithMenu {
                     final SimpleDateFormat simpleDateFormat1 =
                             new SimpleDateFormat("dd/M/yyyy ",Locale.US);
                     final SimpleDateFormat simpleDateFormat2 =
-                            new SimpleDateFormat("dd/M/yyyy hh.mm",Locale.US); // TODO double check 24 hour 12.00 etc
+                            new SimpleDateFormat("dd/M/yyyy HH.mm",Locale.US); // TODO double check 24 hour 12.00 etc
                     final String datenew = simpleDateFormat1.format(c.getTime()) + df.format(thisnumber);
 
                     Log.d(TAG, "Time Timing data datenew: " + datenew);
@@ -1360,7 +1411,7 @@ public class Home extends ActivityWithMenu {
 
                 @Override
                 public int getOpacity() {
-                    return 0;
+                    return 0; // TODO Which pixel format should this be?
                 }
             };
             chart.setBackground(background);
@@ -1368,7 +1419,7 @@ public class Home extends ActivityWithMenu {
         previewChart = (PreviewLineChartView) findViewById(R.id.chart_preview);
 
         chart.setLineChartData(bgGraphBuilder.lineData());
-        chart.setOnValueTouchListener(bgGraphBuilder.getOnValueSelectTooltipListener());
+        chart.setOnValueTouchListener(bgGraphBuilder.getOnValueSelectTooltipListener(mActivity));
 
         previewChart.setBackgroundColor(getCol(X.color_home_chart_background));
         previewChart.setZoomType(ZoomType.HORIZONTAL);
@@ -1807,7 +1858,13 @@ public class Home extends ActivityWithMenu {
     }
 
     @NonNull
-    private String extraStatusLine() {
+    public static String extraStatusLine() {
+
+        if ((prefs == null) && (xdrip.getAppContext() != null)) {
+            prefs = PreferenceManager.getDefaultSharedPreferences(xdrip.getAppContext());
+        }
+        if (prefs==null) return "";
+
         StringBuilder extraline = new StringBuilder();
         Calibration lastCalibration = Calibration.lastValid();
         if (prefs.getBoolean("status_line_calibration_long", false) && lastCalibration != null) {
@@ -1833,9 +1890,10 @@ public class Home extends ActivityWithMenu {
                 || prefs.getBoolean("status_line_a1c_ifcc", false
                 || prefs.getBoolean("status_line_in", false))
                 || prefs.getBoolean("status_line_high", false)
-                || prefs.getBoolean("status_line_low", false)) {
+                || prefs.getBoolean("status_line_low", false)
+                || prefs.getBoolean("status_line_capture_percentage", false)) {
 
-            StatsResult statsResult = new StatsResult(prefs);
+            StatsResult statsResult = new StatsResult(prefs, getPreferencesBooleanDefaultFalse("extra_status_stats_24h"));
 
             if (prefs.getBoolean("status_line_avg", false)) {
                 if (extraline.length() != 0) extraline.append(' ');
@@ -1861,12 +1919,25 @@ public class Home extends ActivityWithMenu {
                 if (extraline.length() != 0) extraline.append(' ');
                 extraline.append(statsResult.getLowPercentage());
             }
+            if (prefs.getBoolean("status_line_capture_percentage", false)) {
+                if (extraline.length() != 0) extraline.append(' ');
+                extraline.append(statsResult.getCapturePercentage(false));
+            }
         }
-        if (prefs.getBoolean("status_line_capture_percentage", false)) {
-            if (extraline.length() != 0) extraline.append(' ');
-            if (BgGraphBuilder.capturePercentage>-1)
-                extraline.append("Cap: "+JoH.qs(BgGraphBuilder.capturePercentage)+"%");
+        if (prefs.getBoolean("extra_status_calibration_plugin", false)) {
+            final CalibrationAbstract plugin = getCalibrationPluginFromPreferences(); // make sure do this only once
+            if (plugin != null) {
+                final CalibrationAbstract.CalibrationData pcalibration = plugin.getCalibrationData();
+                if (extraline.length() > 0) extraline.append("\n"); // not tested on the widget yet
+                if (pcalibration != null) extraline.append("(" + plugin.getAlgorithmName() + ") s:" + JoH.qs(pcalibration.slope, 2) + " i:" + JoH.qs(pcalibration.intercept, 2));
+                BgReading bgReading = BgReading.last();
+                if (bgReading != null) {
+                    final boolean doMgdl = prefs.getString("units", "mgdl").equals("mgdl");
+                    extraline.append(" \u21D2 " + BgGraphBuilder.unitized_string(plugin.getGlucoseFromSensorValue(bgReading.age_adjusted_raw_value), doMgdl) + " " + BgGraphBuilder.unit(doMgdl));
+                }
+            }
         }
+
         if (prefs.getBoolean("status_line_time", false)) {
             SimpleDateFormat sdf = new SimpleDateFormat("HH:mm");
             if (extraline.length() != 0) extraline.append(' ');
@@ -2008,9 +2079,14 @@ public class Home extends ActivityWithMenu {
     }
 
     @Override
-    public boolean dispatchTouchEvent(MotionEvent ev){
+    public boolean dispatchTouchEvent(MotionEvent ev) {
         if (blockTouches) return true;
-        return super.dispatchTouchEvent(ev);
+        try {
+            return super.dispatchTouchEvent(ev);
+        } catch (Exception e) {
+            // !?
+            return false;
+        }
     }
 
     @Override
@@ -2022,6 +2098,7 @@ public class Home extends ActivityWithMenu {
         if (!prefs.getBoolean("wear_sync", false)) {
             menu.removeItem(R.id.action_open_watch_settings);
             menu.removeItem(R.id.action_resend_last_bg);
+            menu.removeItem(R.id.action_sync_watch_db);//KS
         }
 
         //speak readings
@@ -2224,7 +2301,7 @@ public class Home extends ActivityWithMenu {
                             Home.startHomeWithExtra(xdrip.getAppContext(), Home.CREATE_TREATMENT_NOTE, Long.toString(timestamp), Double.toString(position));
                         }
                     };
-                    Home.snackBar(getString(R.string.added)+":    " + treatment_text, mOnClickListener);
+                    Home.snackBar(getString(R.string.added)+":    " + treatment_text, mOnClickListener, mActivity);
                 }
 
                 if (getPreferencesBooleanDefaultFalse("default_to_voice_notes")) showcasemenu(SHOWCASE_NOTE_LONG);
@@ -2289,6 +2366,10 @@ public class Home extends ActivityWithMenu {
                 break;
             case R.id.action_open_watch_settings:
                 startService(new Intent(this, WatchUpdaterService.class).setAction(WatchUpdaterService.ACTION_OPEN_SETTINGS));
+            case R.id.action_sync_watch_db://KS
+                Log.d(TAG, "start WatchUpdaterService with ACTION_SYNC_DB");
+                startService(new Intent(this, WatchUpdaterService.class).setAction(WatchUpdaterService.ACTION_SYNC_DB));
+                break;
         }
 
         if (item.getItemId() == R.id.action_export_database) {
@@ -2398,6 +2479,13 @@ public class Home extends ActivityWithMenu {
         return false;
     }
 
+    public static void togglePreferencesBoolean(final String pref) {
+        if ((prefs == null) && (xdrip.getAppContext() != null)) {
+            prefs = PreferenceManager.getDefaultSharedPreferences(xdrip.getAppContext());
+        }
+        if (prefs != null) prefs.edit().putBoolean(pref, !prefs.getBoolean(pref, false)).apply();
+    }
+
     public static String getPreferencesStringDefaultBlank(final String pref) {
         if ((prefs == null) && (xdrip.getAppContext() != null)) {
             prefs = PreferenceManager.getDefaultSharedPreferences(xdrip.getAppContext());
@@ -2491,11 +2579,11 @@ public class Home extends ActivityWithMenu {
         }
     }
 
-    public static void snackBar(String message, View.OnClickListener mOnClickListener) {
+    public static void snackBar(String message, View.OnClickListener mOnClickListener, Activity activity) {
 
         android.support.design.widget.Snackbar.make(
 
-                mActivity.findViewById(android.R.id.content),
+                activity.findViewById(android.R.id.content),
                 message, android.support.design.widget.Snackbar.LENGTH_LONG)
                 .setAction(R.string.add_note, mOnClickListener)
                 //.setActionTextColor(Color.RED)

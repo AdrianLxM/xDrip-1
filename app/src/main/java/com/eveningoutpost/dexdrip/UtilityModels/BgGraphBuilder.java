@@ -1,5 +1,6 @@
 package com.eveningoutpost.dexdrip.UtilityModels;
 
+import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
@@ -25,6 +26,8 @@ import com.eveningoutpost.dexdrip.Models.Profile;
 import com.eveningoutpost.dexdrip.Models.Treatments;
 import com.eveningoutpost.dexdrip.Models.UserError;
 import com.eveningoutpost.dexdrip.Services.ActivityRecognizedService;
+import com.eveningoutpost.dexdrip.calibrations.CalibrationAbstract;
+import com.eveningoutpost.dexdrip.calibrations.PluggableCalibration;
 import com.eveningoutpost.dexdrip.utils.DexCollectionType;
 import com.eveningoutpost.dexdrip.xdrip;
 import com.google.android.gms.location.DetectedActivity;
@@ -93,7 +96,10 @@ public class BgGraphBuilder {
     public final static double NOISE_FORGIVE = 100;
     public static double low_occurs_at = -1;
     public static double previous_low_occurs_at = -1;
+    private static double low_occurs_at_processed_till_timestamp = -1;
     private final static String TAG = "jamorham graph";
+    private final static int pluginColor = Color.parseColor("#AA00FFFF"); // temporary
+    private final static int pluginSize = 1;
     final int pointSize;
     final int axisTextSize;
     final int previewAxisTextSize;
@@ -129,20 +135,21 @@ public class BgGraphBuilder {
     //private final int numValues =(60/5)*24;
     private final List<BgReading> bgReadings;
     private final List<Calibration> calibrations;
-    private List<PointValue> inRangeValues = new ArrayList<PointValue>();
-    private List<PointValue> highValues = new ArrayList<PointValue>();
-    private List<PointValue> lowValues = new ArrayList<PointValue>();
-    private List<PointValue> rawInterpretedValues = new ArrayList<PointValue>();
-    private List<PointValue> filteredValues = new ArrayList<PointValue>();
-    private List<PointValue> calibrationValues = new ArrayList<PointValue>();
-    private List<PointValue> treatmentValues = new ArrayList<PointValue>();
-    private List<PointValue> iobValues = new ArrayList<PointValue>();
-    private List<PointValue> cobValues = new ArrayList<PointValue>();
-    private List<PointValue> predictedBgValues = new ArrayList<PointValue>();
-    private List<PointValue> polyBgValues = new ArrayList<PointValue>();
-    private List<PointValue> noisePolyBgValues = new ArrayList<PointValue>();
-    private List<PointValue> activityValues = new ArrayList<PointValue>();
-    private List<PointValue> annotationValues = new ArrayList<>();
+    private final List<PointValue> inRangeValues = new ArrayList<PointValue>();
+    private final List<PointValue> highValues = new ArrayList<PointValue>();
+    private final List<PointValue> lowValues = new ArrayList<PointValue>();
+    private final List<PointValue> pluginValues = new ArrayList<PointValue>();
+    private final List<PointValue> rawInterpretedValues = new ArrayList<PointValue>();
+    private final List<PointValue> filteredValues = new ArrayList<PointValue>();
+    private final List<PointValue> calibrationValues = new ArrayList<PointValue>();
+    private final List<PointValue> treatmentValues = new ArrayList<PointValue>();
+    private final List<PointValue> iobValues = new ArrayList<PointValue>();
+    private final List<PointValue> cobValues = new ArrayList<PointValue>();
+    private final List<PointValue> predictedBgValues = new ArrayList<PointValue>();
+    private final List<PointValue> polyBgValues = new ArrayList<PointValue>();
+    private final List<PointValue> noisePolyBgValues = new ArrayList<PointValue>();
+    private final List<PointValue> activityValues = new ArrayList<PointValue>();
+    private final List<PointValue> annotationValues = new ArrayList<>();
     public static double last_noise = -99999;
     public static double best_bg_estimate = -99999;
     public static double last_bg_estimate = -99999;
@@ -177,6 +184,7 @@ public class BgGraphBuilder {
 
         if ((end - start) > 80000000) {
             try {
+                // TODO something about this means it never seems to get to 100% maybe int rounding or timing related.
                 capturePercentage = ((bgReadings.size() * 100) / ((end - start) / 300000));
                 //Log.d(TAG, "CPTIMEPERIOD: " + Long.toString(end - start) + " percentage: " + JoH.qs(capturePercentage));
             } catch (Exception e) {
@@ -337,7 +345,11 @@ public class BgGraphBuilder {
         previewLineData.setAxisYLeft(yAxis());
         previewLineData.setAxisXBottom(previewXAxis());
 
+        final List<Line> removeItems = new ArrayList<>();
         for (Line lline : previewLineData.getLines()) {
+            if ((lline.getPointRadius() == pluginSize) && (lline.getPointColor() == pluginColor)) {
+                removeItems.add(lline); // remove plugin plot from preview graph
+            }
             if ((lline.hasLabels() && (lline.getPointRadius() > 0))) {
 
                 lline.setPointRadius(3); // preserve size for treatments
@@ -347,6 +359,11 @@ public class BgGraphBuilder {
             }
             lline.setHasLabels(false);
         }
+
+        for (Line item : removeItems) {
+            previewLineData.getLines().remove(item);
+        }
+
         // needs more adjustments - foreach
         return previewLineData;
     }
@@ -411,6 +428,11 @@ public class BgGraphBuilder {
             lines.add(inRangeValuesLine());
             lines.add(lowValuesLine());
             lines.add(highValuesLine());
+
+            List<Line> extra_lines = extraLines();
+            for (Line eline : extra_lines) {
+                lines.add(eline);
+            }
 
             // check show debug option here - drawn on top of others
             lines.add(treatments[8]); // noise poly predict
@@ -549,6 +571,18 @@ public class BgGraphBuilder {
         return line;
     }
 
+    public List<Line> extraLines()
+    {
+        final List<Line> lines = new ArrayList<>();
+        Line line = new Line(pluginValues);
+        line.setHasLines(false);
+        line.setPointRadius(pluginSize);
+        line.setHasPoints(true);
+        line.setColor(pluginColor);
+        lines.add(line);
+        return lines;
+    }
+
     public Line[] calibrationValuesLine() {
         Line[] lines = new Line[2];
         lines[0] = new Line(calibrationValues);
@@ -666,7 +700,7 @@ public class BgGraphBuilder {
         return lines;
     }
 
-    private void addBgReadingValues() {
+    public void addBgReadingValues() {
        //UserError.Log.i(TAG, "ADD BG READINGS START");
         filteredValues.clear();
         rawInterpretedValues.clear();
@@ -682,18 +716,20 @@ public class BgGraphBuilder {
         lowValues.clear();
         inRangeValues.clear();
         calibrationValues.clear();
+        pluginValues.clear();
 
         final double bgScale = bgScale();
         final double now = JoH.ts();
-
+        long highest_bgreading_timestamp = -1;
         double trend_start_working = now-(1000*60*12); // 10 minutes // TODO MAKE PREFERENCE?
         if (bgReadings.size()>0)
         {
-            final double ms_since_last_reading = now-bgReadings.get(0).timestamp;
+            highest_bgreading_timestamp = bgReadings.get(0).timestamp;
+            final double ms_since_last_reading = now-highest_bgreading_timestamp;
             if (ms_since_last_reading<500000)
             {
                 trend_start_working -= ms_since_last_reading; // push back start of trend calc window
-                Log.d(TAG,"Pushed back trend start by: "+JoH.qs(ms_since_last_reading/1000)+" secs - last reading: "+JoH.dateTimeText(bgReadings.get(0).timestamp));
+                Log.d(TAG,"Pushed back trend start by: "+JoH.qs(ms_since_last_reading/1000)+" secs - last reading: "+JoH.dateTimeText(highest_bgreading_timestamp));
             }
         }
 
@@ -710,10 +746,10 @@ public class BgGraphBuilder {
         polys[3] = new Forecast.PowerTrendLine();
         TrendLine poly = null;
 
-        List<Double> polyxList = new ArrayList<Double>();
-        List<Double> polyyList = new ArrayList<Double>();
-        List<Double> noise_polyxList = new ArrayList<Double>();
-        List<Double> noise_polyyList = new ArrayList<Double>();
+        final List<Double> polyxList = new ArrayList<Double>();
+        final List<Double> polyyList = new ArrayList<Double>();
+        final List<Double> noise_polyxList = new ArrayList<Double>();
+        final List<Double> noise_polyyList = new ArrayList<Double>();
 
         final double avg1start = now-(1000*60*60*8); // 8 hours
         final double momentum_illustration_start = now-(1000*60*60*2); // 8 hours
@@ -751,12 +787,14 @@ public class BgGraphBuilder {
         final boolean interpret_raw = prefs.getBoolean("interpret_raw", false);
         final boolean show_filtered = prefs.getBoolean("show_filtered_curve", false) && has_filtered;
         final boolean predict_lows = prefs.getBoolean("predict_lows", true);
-
+        final boolean show_plugin = prefs.getBoolean("plugin_plot_on_graph", false);
 
         if ((Home.get_follower()) && (bgReadings.size() < 3)) {
             GcmActivity.requestBGsync();
         }
 
+        final CalibrationAbstract plugin = (show_plugin) ? PluggableCalibration.getCalibrationPluginFromPreferences() : null;
+        final CalibrationAbstract.CalibrationData cd = (plugin != null) ? plugin.getCalibrationData() : null;
 
 
         for (BgReading bgReading : bgReadings) {
@@ -766,6 +804,9 @@ public class BgGraphBuilder {
             }
             if ((interpret_raw && (bgReading.raw_calculated > 0))) {
                 rawInterpretedValues.add(new PointValue((float) (bgReading.timestamp / FUZZER), (float) unitized(bgReading.raw_calculated)));
+            }
+            if ((plugin != null) && (cd != null)) {
+                pluginValues.add(new PointValue((float) (bgReading.timestamp / FUZZER), (float) unitized(plugin.getGlucoseFromBgReading(bgReading, cd))));
             }
             if (bgReading.calculated_value >= 400) {
                 highValues.add(new PointValue((float) (bgReading.timestamp / FUZZER), (float) unitized(400)));
@@ -919,6 +960,7 @@ public class BgGraphBuilder {
                 double plow_timestamp = plow_now + (1000 * 60 * 99); // max look-ahead
                 double polyPredicty = poly.predict(plow_timestamp);
                 Log.d(TAG, "Low predictor at max lookahead is: " + JoH.qs(polyPredicty));
+                low_occurs_at_processed_till_timestamp = highest_bgreading_timestamp; // store that we have processed up to this timestamp
                 if (polyPredicty <= (lowMark+offset)) {
                     low_occurs_at = plow_timestamp;
                     final double lowMarkIndicator = (lowMark - (lowMark / 4));
@@ -1214,6 +1256,22 @@ public class BgGraphBuilder {
         }
     }
 
+    public static double getCurrentLowOccursAt() {
+        try {
+            final long last_bg_reading_timestamp = BgReading.last().timestamp;
+            if (low_occurs_at_processed_till_timestamp < last_bg_reading_timestamp) {
+                Log.d(TAG, "Recalculating lowOccursAt: " + JoH.dateTimeText((long) low_occurs_at_processed_till_timestamp) + " vs " + JoH.dateTimeText(last_bg_reading_timestamp));
+                // new only the last hour worth of data for this
+                (new BgGraphBuilder(xdrip.getAppContext(), System.currentTimeMillis() - 60 * 60 * 1000, System.currentTimeMillis() + 5 * 60 * 1000, 12, true)).addBgReadingValues();
+            } else {
+                Log.d(TAG, "Cached current low timestamp ok: " +  JoH.dateTimeText((long) low_occurs_at_processed_till_timestamp) + " vs " + JoH.dateTimeText(last_bg_reading_timestamp));
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Got exception in getCurrentLowOccursAt() " + e);
+        }
+        return low_occurs_at;
+    }
+
     public Line avg1Line() {
         List<PointValue> myLineValues = new ArrayList<PointValue>();
         myLineValues.add(new PointValue((float) avg1startfuzzed, (float) unitized(avg1value)));
@@ -1436,6 +1494,10 @@ public class BgGraphBuilder {
     }
 
     public String unitized_string(double value) {
+        return unitized_string(value, doMgdl);
+    }
+
+    public static String unitized_string(double value, boolean doMgdl) {
         DecimalFormat df = new DecimalFormat("#");
         if (value >= 400) {
             return "HIGH";
@@ -1529,21 +1591,29 @@ public class BgGraphBuilder {
     }
 
     public String unit() {
+        return unit(doMgdl);
+    }
+
+    public static String unit(boolean doMgdl) {
         if (doMgdl) {
             return "mg/dl";
         } else {
             return "mmol";
         }
-
     }
 
-    public OnValueSelectTooltipListener getOnValueSelectTooltipListener() {
-        return new OnValueSelectTooltipListener();
+    public OnValueSelectTooltipListener getOnValueSelectTooltipListener(Activity callerActivity) {
+        return new OnValueSelectTooltipListener(callerActivity);
     }
 
     public class OnValueSelectTooltipListener implements LineChartOnValueSelectListener {
 
         private Toast tooltip;
+        private Activity callerActivity;
+
+        public OnValueSelectTooltipListener(Activity callerActivity) {
+            this.callerActivity = callerActivity;
+        }
 
         @Override
         public synchronized void onValueSelected(int i, int i1, PointValue pointValue) {
@@ -1578,22 +1648,11 @@ public class BgGraphBuilder {
             final View.OnClickListener mOnClickListener = new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
-                    Home.startHomeWithExtra(xdrip.getAppContext(), Home.CREATE_TREATMENT_NOTE, time.toString(), Double.toString(ypos) );
+                    Home.startHomeWithExtra(xdrip.getAppContext(), Home.CREATE_TREATMENT_NOTE, time.toString(), Double.toString(ypos));
                 }
             };
-          Home.snackBar(message,mOnClickListener);
+            Home.snackBar(message, mOnClickListener, callerActivity);
 
-           /* if (tooltip != null) {
-                tooltip.cancel();
-            }
-            if (alternate.length()>0) {
-                tooltip = Toast.makeText(context, timeFormat.format(time) + ": "+alternate, Toast.LENGTH_LONG);
-            } else {
-                tooltip = Toast.makeText(context, timeFormat.format(time) + ": " + Math.round(pointValue.getY() * 10) / 10d + filtered, Toast.LENGTH_LONG);
-            }
-            View view = tooltip.getView();
-            view.setBackgroundColor(getCol(X.color_home_chart_background));
-            tooltip.show();*/
         }
 
         @Override

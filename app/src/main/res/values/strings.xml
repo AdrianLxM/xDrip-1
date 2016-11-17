@@ -109,6 +109,7 @@
 
     <string name="action_resend_to_watch">Resend glucose to watch</string>
     <string name="action_open_watch_setting">Open Settings on Wear</string>
+    <string name="action_sync_watch_db">Reset Wear DB</string>
 
     <string name="erase">Erase</string>
     <string name="interface_tips_from_start">All interface tips will show again from the start</string>
@@ -218,11 +219,18 @@
     <string name="run_collector_in_foreground">Run Collector in foreground</string>
     <string name="shows_a_persistent_notification">Shows a persistent notification graph, visible on lock-screen and prevents android killing the service.</string>
     <string name="list_of_receivers">List of recievers</string>
+    <string name="extra_tags_for_logging">Extra tags for logging</string>
+    <string name="extra_tags_dialog_message">The tags entered here will be logged into xDrip. Format is tag:level. Level can be v,d,i. For example bgreading:i,DexCollectionService:v. This tags will be logged with low priority to Error and event list.</string>
+    <string name="extra_tags_dialog_title">Enter more tags to be logged</string>
     <string name="data_source_settings">Data Source Settings</string>
     <string name="smart_watch_features">Smart Watch Features</string>
     <string name="wear_integration">Wear Integration</string>
     <string name="send_data_to_android_wear_watch">Send data to Android Wear Watchface.</string>
     <string name="android_wear_integration">Android Wear Integration</string>
+    <string name="pref_wear_connectG5">Connect Wear to G5</string>
+    <string name="pref_summary_wear_connectG5">Connect Wear directly to G5</string>
+    <string name="pref_use_wear_connectG5">Use Wear G5 Collection Service</string>
+    <string name="pref_summary_use_wear_connectG5">Force phone to use Wear G5 Collection Service</string>
     <string name="pebble_integration">Pebble Integration</string>
     <string name="send_data_to_pebble_watchface">Send data to Pebble Watchface.</string>
     <string name="pebble_watch_integration">Pebble Watch Integration</string>
@@ -468,6 +476,7 @@
     <string name="override_phone_silent_mode_colon">Override phone Silent Mode:</string>
     <string name="vibrate_on_alert">Vibrate on alert</string>
     <string name="test_alert">test alert</string>
+    <string name="disable_alert">disable alert</string>
     <string name="save_alert">save alert</string>
     <string name="remove_alert">remove alert</string>
     <string name="snooze_alert_before_it_fires">snooze alert before it fires</string>
@@ -499,5 +508,9 @@
     <string name="short_off_text_for_switches">OFF</string>
     <string name="short_on_text_for_switches">ON</string>
     <string name="install_pebble_apps">Install Pebble Apps</string>
+    <string name="sliding_24_hour_window_summary">Use last 24 hours instead of time since midnight for statistics.</string>
+    <string name="sliding_24_hour_window">Sliding Window</string>
+    <string name="split">Split</string>
+    <string name="delete">Delete</string>
 
 </resources>
