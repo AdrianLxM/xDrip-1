@@ -19,6 +19,8 @@ import android.widget.Toast;
 import com.eveningoutpost.dexdrip.Models.BgReading;
 import com.eveningoutpost.dexdrip.Models.JoH;
 import com.eveningoutpost.dexdrip.Models.Treatments;
+import com.eveningoutpost.dexdrip.Models.UserError;
+import com.eveningoutpost.dexdrip.UtilityModels.PersistentStore;
 import com.eveningoutpost.dexdrip.utils.CipherUtils;
 import com.eveningoutpost.dexdrip.utils.DisplayQRCode;
 import com.eveningoutpost.dexdrip.utils.SdcardImportExport;
@@ -141,43 +143,120 @@ public class GcmActivity extends Activity {
         return "sent async";
     }
 
-    public static void syncBGReading(BgReading bgReading) {
-        GcmActivity.sendMessage(GcmActivity.myIdentity(), "bgs", bgReading.toJSON());
+    public synchronized static void syncBGReading(BgReading bgReading) {
+        if (JoH.ratelimit("gcm-bgs-batch", 15)) {
+            GcmActivity.sendMessage("bgs", bgReading.toJSON());
+        } else {
+            PersistentStore.appendString("gcm-bgs-batch-queue", bgReading.toJSON(), "^");
+            PersistentStore.setLong("gcm-bgs-batch-time", JoH.tsl());
+            processBgsBatch(false);
+        }
+    }
+
+    private synchronized static void processBgsBatch(boolean send_now) {
+        final String value = PersistentStore.getString("gcm-bgs-batch-queue");
+        Log.d(TAG, "Processing BgsBatch: length: " + value.length() + " now:" + send_now);
+        if ((send_now) || (value.length() > 700)) {
+            if (value.length() > 0) {
+                PersistentStore.setString("gcm-bgs-batch-queue", "");
+                GcmActivity.sendMessage("bgs", value);
+            }
+            Log.d(TAG, "Sent batch");
+        } else {
+            JoH.runOnUiThreadDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    if (JoH.msSince(PersistentStore.getLong("gcm-bgs-batch-time")) > 4000) {
+                        Log.d(TAG, "Progressing BGSbatch due to timeout");
+                        processBgsBatch(true);
+                    }
+                }
+            }, 5000);
+        }
     }
 
     public static void requestPing() {
         if ((JoH.ts() - last_ping_request) > (60 * 1000 * 15)) {
             last_ping_request = JoH.ts();
             Log.d(TAG, "Sending ping");
-            GcmActivity.sendMessage("ping", "");
+            if (JoH.pratelimit("gcm-ping",1199)) GcmActivity.sendMessage("ping", "");
         } else {
             Log.d(TAG, "Already requested ping recently");
         }
     }
 
     public static void sendLocation(final String location) {
-        if (JoH.ratelimit("gcm-plu", 180)) {
+        if (JoH.pratelimit("gcm-plu", 180)) {
             GcmActivity.sendMessage("plu", location);
         }
     }
 
     public static void sendSensorBattery(final int battery) {
-        if (JoH.ratelimit("gcm-sbu", 300)) {
+        if (JoH.pratelimit("gcm-sbu", 300)) {
             GcmActivity.sendMessage("sbu", Integer.toString(battery));
         }
     }
 
     public static void sendBridgeBattery(final int battery) {
         if (battery != last_bridge_battery) {
-            if (JoH.ratelimit("gcm-bbu", 1800)) {
+            if (JoH.pratelimit("gcm-bbu", 1800)) {
                 GcmActivity.sendMessage("bbu", Integer.toString(battery));
                 last_bridge_battery = battery;
             }
         }
     }
 
+    private static void sendRealSnoozeToRemote() {
+        if (JoH.pratelimit("gcm-sra", 60)) {
+            String wifi_ssid = JoH.getWifiSSID();
+            if (wifi_ssid == null) wifi_ssid = "";
+            sendMessage("sra", Long.toString(JoH.tsl()) + "^" + JoH.base64encode(wifi_ssid));
+        }
+    }
+
+    public static void sendSnoozeToRemote() {
+        if ((Home.get_master() || Home.get_follower()) && (Home.getPreferencesBooleanDefaultFalse("send_snooze_to_remote"))
+                && (JoH.pratelimit("gcm-sra-maybe", 5))) {
+            if (Home.getPreferencesBooleanDefaultFalse("confirm_snooze_to_remote")) {
+                Home.startHomeWithExtra(xdrip.getAppContext(), Home.HOME_FULL_WAKEUP, "1");
+                Home.startHomeWithExtra(xdrip.getAppContext(), Home.SNOOZE_CONFIRM_DIALOG, "");
+            } else {
+                sendRealSnoozeToRemote();
+                UserError.Log.ueh(TAG, "Sent snooze to remote");
+            }
+        }
+    }
+
+    public static void sendSnoozeToRemoteWithConfirm(final Context context) {
+        final long when = JoH.tsl();
+        final AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        builder.setTitle("Confirm Remote Snooze");
+        builder.setMessage("Are you sure you wish to snooze all other devices in your sync group?");
+        builder.setPositiveButton("YES, send it!", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int which) {
+                dialog.dismiss();
+                if ((JoH.tsl() - when) < 120000) {
+                    sendRealSnoozeToRemote();
+                    UserError.Log.ueh(TAG, "Sent snooze to remote after confirmation");
+                } else {
+                    JoH.static_toast_long("Took too long to confirm! Ignoring!");
+                    UserError.Log.ueh(TAG, "Ignored snooze confirmation as took > 2 minutes to confirm!");
+                }
+            }
+        });
+
+        builder.setNegativeButton("NO", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                dialog.dismiss();
+            }
+        });
+        AlertDialog alert = builder.create();
+        alert.show();
+    }
+
     public static void sendMotionUpdate(final long timestamp, final int activity) {
-        if (JoH.ratelimit("gcm-amu", 5)) {
+        if (JoH.pratelimit("gcm-amu", 5)) {
             sendMessage("amu", Long.toString(timestamp) + "^" + Integer.toString(activity));
         }
     }
@@ -187,7 +266,7 @@ public class GcmActivity extends Activity {
         if (token != null) {
             if ((JoH.ts() - last_sync_request) > (60 * 1000 * (5 + bg_sync_backoff))) {
                 last_sync_request = JoH.ts();
-                GcmActivity.sendMessage("bfr", "");
+                if (JoH.pratelimit("gcm-bfr",299)) GcmActivity.sendMessage("bfr", "");
                 bg_sync_backoff++;
             } else {
                 Log.d(TAG, "Already requested BGsync recently, backoff: " + bg_sync_backoff);
@@ -253,7 +332,7 @@ public class GcmActivity extends Activity {
     }
 
     public static void requestSensorBatteryUpdate() {
-        if (Home.get_follower() && JoH.ratelimit("SensorBatteryUpdateRequest", 300)) {
+        if (Home.get_follower() && JoH.pratelimit("SensorBatteryUpdateRequest", 1200)) {
             Log.d(TAG, "Requesting Sensor Battery Update");
             GcmActivity.sendMessage("sbr", ""); // request sensor battery update
         }
@@ -390,6 +469,10 @@ public class GcmActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         try {
             super.onCreate(savedInstanceState);
+            if (Home.getPreferencesBooleanDefaultFalse("disable_all_sync")) {
+                cease_all_activity = true;
+                Log.d(TAG, "Sync services disabled");
+            }
             if (cease_all_activity) {
                 finish();
                 return;
