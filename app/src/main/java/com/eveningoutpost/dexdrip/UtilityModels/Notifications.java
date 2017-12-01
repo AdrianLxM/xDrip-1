@@ -580,10 +580,10 @@ public class Notifications extends IntentService {
         //final NotificationCompat.Builder b = new NotificationCompat.Builder(mContext, NotificationChannels.ONGOING_CHANNEL);
         final NotificationCompat.Builder b = new NotificationCompat.Builder(mContext); // temporary fix until ONGOING CHANNEL is silent by default on android 8+
         //b.setOngoing(true);
-        b.setVisibility(Home.getPreferencesBooleanDefaultFalse("public_notifications") ? Notification.VISIBILITY_PUBLIC : Notification.VISIBILITY_PRIVATE);
+        //b.setVisibility(Home.getPreferencesBooleanDefaultFalse("public_notifications") ? Notification.VISIBILITY_PUBLIC : Notification.VISIBILITY_PRIVATE);
         b.setCategory(NotificationCompat.CATEGORY_STATUS);
         if (Home.getPreferencesBooleanDefaultFalse("high_priority_notifications")) {
-            b.setPriority(Notification.PRIORITY_HIGH);
+            //b.setPriority(Notification.PRIORITY_HIGH);
         }
         final BestGlucose.DisplayGlucose dg = (use_best_glucose) ? BestGlucose.getDisplayGlucose() : null;
         final boolean use_color_in_notification = false; // could be preference option
@@ -596,7 +596,7 @@ public class Notifications extends IntentService {
         if (lastReading != null) {
 
             b.setWhen(lastReading.timestamp);
-            final SpannableString deltaString = new SpannableString("Delta: " + ((dg != null) ? (dg.spannableString(dg.unitized_delta + (dg.from_plugin ? " "+context.getString(R.string.p_in_circle) : "")))
+            final SpannableString deltaString = new SpannableString("  Δ: " + ((dg != null) ? (dg.spannableString(dg.unitized_delta + (dg.from_plugin ? " "+context.getString(R.string.p_in_circle) : "")))
                     : bgGraphBuilder.unitizedDeltaString(true, true)));
 
             b.setContentText(deltaString);
@@ -608,20 +608,8 @@ public class Notifications extends IntentService {
                     .setBackgroundColor(getCol(X.color_notification_chart_background))
                     .build();
             b.setLargeIcon(iconBitmap);
-            NotificationCompat.BigPictureStyle bigPictureStyle = new NotificationCompat.BigPictureStyle();
-            notifiationBitmap = new BgSparklineBuilder(mContext)
-                    .setBgGraphBuilder(bgGraphBuilder)
-                    .showHighLine()
-                    .showLowLine()
-                    .setStart(System.currentTimeMillis() - 60000 * 60 * 3)
-                    .showAxes(true)
-                    .setBackgroundColor(getCol(X.color_notification_chart_background))
-                    .setShowFiltered(DexCollectionType.hasFiltered() && Home.getPreferencesBooleanDefaultFalse("show_filtered_curve"))
-                    .build();
-            bigPictureStyle.bigPicture(notifiationBitmap)
-                    .setSummaryText(deltaString)
-                    .setBigContentTitle(titleString);
-            b.setStyle(bigPictureStyle);
+            b.setContentTitle(titleString + "" + deltaString);
+            b.setContentText(Home.extraStatusLine());
         }
         b.setContentIntent(resultPendingIntent);
         b.setLocalOnly(true);

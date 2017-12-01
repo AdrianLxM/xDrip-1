@@ -206,11 +206,9 @@ public class BgSendQueue extends Model {
                 }
 
                 //just keep it alive for 3 more seconds to allow the watch to be updated
-                // TODO: change NightWatch to not allow the system to sleep.
-                if ((!quick) && (prefs.getBoolean("excessive_wakelocks", false))) {
+                // TODO: change NightWatch to not llow the system to sleep.
                     powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,
-                            "broadcstNightWatch").acquire(3000);
-                }
+                            "broadcstNightWatch").acquire(60*1000);
             }
 
             // send to wear

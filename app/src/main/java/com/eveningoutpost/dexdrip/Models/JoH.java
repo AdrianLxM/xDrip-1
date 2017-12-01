@@ -106,7 +106,7 @@ public class JoH {
     private static Map<String, Double> benchmarks = new HashMap<String, Double>();
     private static final Map<String, Long> rateLimits = new HashMap<>();
 
-    public static boolean buggy_samsung = false; // flag set when we detect samsung devices which do not perform to android specifications
+    public static boolean buggy_samsung = true; // flag set when we detect samsung devices which do not perform to android specifications
 
     // qs = quick string conversion of double for printing
     public static String qs(double x) {
