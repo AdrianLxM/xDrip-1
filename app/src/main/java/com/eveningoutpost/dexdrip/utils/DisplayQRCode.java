@@ -1,21 +1,23 @@
 package com.eveningoutpost.dexdrip.utils;
 
-import android.app.Activity;
-import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.os.PowerManager;
 import android.preference.PreferenceManager;
-import android.support.v7.app.AppCompatActivity;
 import android.util.Base64;
 import android.util.Log;
 import android.view.View;
-import android.widget.Toast;
 
+import com.eveningoutpost.dexdrip.BaseAppCompatActivity;
 import com.eveningoutpost.dexdrip.GcmActivity;
-import com.eveningoutpost.dexdrip.Home;
 import com.eveningoutpost.dexdrip.Models.JoH;
 import com.eveningoutpost.dexdrip.R;
+import com.eveningoutpost.dexdrip.UtilityModels.Pref;
+import com.eveningoutpost.dexdrip.UtilityModels.PrefsViewImpl;
+import com.eveningoutpost.dexdrip.UtilityModels.desertsync.RouteTools;
+import com.eveningoutpost.dexdrip.databinding.ActivityDisplayQrcodeBinding;
+import com.eveningoutpost.dexdrip.xdrip;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 import com.google.zxing.integration.android.IntentIntegrator;
@@ -31,15 +33,14 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-public class DisplayQRCode extends AppCompatActivity {
+public class DisplayQRCode extends BaseAppCompatActivity {
 
     public static final String qrmarker = "xdpref:";
     private static final String TAG = "jamorham qr";
     private static String send_url;
-    private SharedPreferences prefs;
-    public static Context mContext;
+    private final SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(xdrip.getAppContext());
     private static DisplayQRCode mInstance;
-    private Map<String, String> prefsMap = new HashMap<String, String>();
+    private Map<String, String> prefsMap = new HashMap<>();
 
     public static Map<String, String> decodeString(String data) {
         try {
@@ -66,10 +67,31 @@ public class DisplayQRCode extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        mContext = getApplicationContext();
         mInstance = this;
-        setContentView(R.layout.activity_display_qrcode);
+        final ActivityDisplayQrcodeBinding binding = ActivityDisplayQrcodeBinding.inflate(getLayoutInflater());
+        binding.setPrefs(new PrefsViewImpl());
+        setContentView(binding.getRoot());
         JoH.fixActionBar(this);
+        processIntent(getIntent());
+    }
+
+    @Override
+    public void onNewIntent(Intent intent) {
+        processIntent(intent);
+    }
+
+
+    private void processIntent(final Intent intent) {
+        if (intent != null) {
+            final String action = intent.getAction();
+            if (action != null) {
+                switch (action) {
+                    case "xdrip_plus_desert_sync_qr":
+                        desertSyncSettings(null);
+                        break;
+                }
+            }
+        }
     }
 
     @Override
@@ -78,15 +100,13 @@ public class DisplayQRCode extends AppCompatActivity {
         super.onDestroy();
     }
 
-    public void xdripPlusSyncSettings(View view) {
-        prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
+    public synchronized void xdripPlusSyncSettings(View view) {
         prefsMap.put("custom_sync_key", prefs.getString("custom_sync_key", ""));
         prefsMap.put("use_custom_sync_key", Boolean.toString(prefs.getBoolean("use_custom_sync_key", false)));
         showQRCode();
     }
 
-    public void connectionSettings(View view) {
-        prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
+    public synchronized void connectionSettings(View view) {
         prefsMap.clear();
         prefsMap.put("wifi_recievers_addresses", prefs.getString("wifi_recievers_addresses", ""));
         prefsMap.put("dex_collection_method", prefs.getString("dex_collection_method", "BluetoothWixel"));
@@ -98,8 +118,7 @@ public class DisplayQRCode extends AppCompatActivity {
         showQRCode();
     }
 
-    public void alarmSettings(View view) {
-        prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
+    public synchronized void alarmSettings(View view) {
         prefsMap.clear();
         prefsMap.put("bg_alert_profile", prefs.getString("bg_alert_profile", "ascending"));
         prefsMap.put("smart_snoozing", Boolean.toString(prefs.getBoolean("smart_snoozing", true)));
@@ -109,8 +128,21 @@ public class DisplayQRCode extends AppCompatActivity {
         showQRCode();
     }
 
-    public static void uploadBytes(byte[] result, final int callback_option) {
-        final PowerManager.WakeLock wl = JoH.getWakeLock("uploadBytes",1200000);
+    public synchronized void desertSyncSettings(View view) {
+        prefsMap.clear();
+        prefsMap.put("desert_sync_enabled", Boolean.toString(true));
+        prefsMap.put("desert_sync_master_ip", RouteTools.getBestInterfaceAddress());
+        prefsMap.put("dex_collection_method", "Follower");
+        prefsMap.put("custom_sync_key", Pref.getString("custom_sync_key", ""));
+        prefsMap.put("use_custom_sync_key", Boolean.toString(Pref.getBoolean("use_custom_sync_key", false)));
+        prefsMap.put("desert_use_https", Boolean.toString(Pref.getBooleanDefaultFalse("desert_use_https")));
+        prefsMap.put("xdrip_webservice_secret", Pref.getString("xdrip_webservice_secret", ""));
+        showQRCode();
+    }
+
+
+    public static synchronized void uploadBytes(byte[] result, final int callback_option) {
+        final PowerManager.WakeLock wl = JoH.getWakeLock("uploadBytes", 1200000);
         if ((result != null) && (result.length > 0)) {
             final byte[] mykey = CipherUtils.getRandomKey();
 
@@ -127,7 +159,7 @@ public class DisplayQRCode extends AppCompatActivity {
                 toast("Preparing");
 
                 try {
-                    send_url = mContext.getString(R.string.wserviceurl) + "/joh-setsw";
+                    send_url = xdrip.getAppContext().getString(R.string.wserviceurl) + "/joh-setsw";
                     final String bbody = Base64.encodeToString(crypted_data, Base64.NO_WRAP);
                     Log.d(TAG, "Upload Body size: " + bbody.length());
                     final RequestBody formBody = new FormEncodingBuilder()
@@ -166,7 +198,7 @@ public class DisplayQRCode extends AppCompatActivity {
                                             }
                                         }
                                     } else {
-                                        Log.d(TAG,"Got unhandled reply: "+reply);
+                                        Log.d(TAG, "Got unhandled reply: " + reply);
                                         toast(reply);
                                     }
                                 } else {
@@ -239,30 +271,9 @@ public class DisplayQRCode extends AppCompatActivity {
         }
     }
 
-    public static void static_toast(final Context context, final String msg) {
-        try {
-            Activity activity = (Activity) context;
-            activity.runOnUiThread(new Runnable() {
-                @Override
-                public void run() {
-                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show();
-                }
-            });
-            Log.d(TAG, "Toast msg: " + msg);
-        } catch (Exception e) {
-            Log.e(TAG, "Couldn't display toast: " + msg);
-        }
-    }
 
     private static void toast(final String msg) {
-        {
-            if (mContext != null) {
-                static_toast(mContext, msg);
-            } else {
-                Log.e(TAG, "mContext is null");
-                Home.toaststatic(msg); // fallback
-            }
-        }
+        JoH.static_toast_short(msg);
     }
 
 }

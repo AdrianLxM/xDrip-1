@@ -1,8 +1,10 @@
 package com.eveningoutpost.dexdrip;
 
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.os.Handler;
+import android.preference.PreferenceManager;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.CheckBox;
@@ -13,14 +15,18 @@ import android.widget.Toast;
 
 import com.eveningoutpost.dexdrip.Models.JoH;
 import com.eveningoutpost.dexdrip.Models.UserError;
+import com.eveningoutpost.dexdrip.UtilityModels.PersistentStore;
 import com.eveningoutpost.dexdrip.UtilityModels.SendFeedBack;
 import com.eveningoutpost.dexdrip.utils.ActivityWithMenu;
+import com.eveningoutpost.dexdrip.wearintegration.WatchUpdaterService;
 
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.eveningoutpost.dexdrip.Home.startWatchUpdaterService;
+
 /**
- * Created by stephenblack on 8/3/15.
+ * Created by Emma Black on 8/3/15.
  */
 public class ErrorsActivity extends ActivityWithMenu {
     public static final String menu_name = "Errors";
@@ -40,10 +46,15 @@ public class ErrorsActivity extends ActivityWithMenu {
     private Handler handler = new Handler();
     private static final boolean d = false;
     private boolean is_visible = false;
+    private SharedPreferences mPrefs;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        mPrefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
+        if (mPrefs.getBoolean("wear_sync", false) && mPrefs.getBoolean("sync_wear_logs", false)) {
+            startWatchUpdaterService(this, WatchUpdaterService.ACTION_SYNC_LOGS, TAG);
+        }
         setContentView(R.layout.activity_errors);
 
         highCheckboxView = (CheckBox) findViewById(R.id.highSeverityCheckbox);
@@ -69,10 +80,10 @@ public class ErrorsActivity extends ActivityWithMenu {
                 final String str = bundle.getString("events");
                 if (str != null) {
                     userEventHighCheckboxView.setChecked(true);
-                    userEventLowCheckboxView.setChecked(false);
-                    mediumCheckboxView.setChecked(false);
-                    highCheckboxView.setChecked(false);
-                    lowCheckboxView.setChecked(false);
+                    userEventLowCheckboxView.setChecked(PersistentStore.getBoolean("events-userlowcheckbox"));
+                    mediumCheckboxView.setChecked(PersistentStore.getBoolean("events-mediumcheckbox"));
+                    highCheckboxView.setChecked(PersistentStore.getBoolean("events-highcheckbox"));
+                    lowCheckboxView.setChecked(PersistentStore.getBoolean("events-lowcheckbox"));
                 }
             }
         }
@@ -130,6 +141,9 @@ public class ErrorsActivity extends ActivityWithMenu {
 
             if (autoRefresh) {
                 getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                if (mPrefs.getBoolean("wear_sync", false) && mPrefs.getBoolean("sync_wear_logs", false)) {
+                    startWatchUpdaterService(getApplicationContext(), WatchUpdaterService.ACTION_SYNC_LOGS, TAG);
+                }
             } else {
                 getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
             }
@@ -155,6 +169,13 @@ public class ErrorsActivity extends ActivityWithMenu {
 
     public void updateErrors(boolean from_timer) {
         List<Integer> severitiesList = new ArrayList<>();
+
+        PersistentStore.setBoolean("events-highcheckbox", highCheckboxView.isChecked());
+        PersistentStore.setBoolean("events-mediumcheckbox", mediumCheckboxView.isChecked());
+        PersistentStore.setBoolean("events-lowcheckbox", lowCheckboxView.isChecked());
+        PersistentStore.setBoolean("events-userlowcheckbox", userEventLowCheckboxView.isChecked());
+        PersistentStore.setBoolean("events-userhighcheckbox", userEventHighCheckboxView.isChecked());
+
         if (highCheckboxView.isChecked()) severitiesList.add(3);
         if (mediumCheckboxView.isChecked()) severitiesList.add(2);
         if (lowCheckboxView.isChecked()) severitiesList.add(1);

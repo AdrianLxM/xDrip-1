@@ -17,7 +17,11 @@ public class TimePickerFragment extends DialogFragment implements TimePickerDial
     private int hour;
     private int minute;
     private Integer timeobj;
-    ProfileAdapter.ProfileCallBacks callback;
+    private String title;
+
+    private Runnable closeRunnable;
+
+    ProfileAdapter.TimePickerCallbacks callback;
 
     public void setTime(int hour, int minute) {
         this.hour = hour;
@@ -30,15 +34,34 @@ public class TimePickerFragment extends DialogFragment implements TimePickerDial
         this.minute = timeobj % 60;
     }
 
-    public void setTimeCallback(ProfileAdapter.ProfileCallBacks callback) {
+    public void setTitle(String title) {
+        this.title = title;
+    }
+
+    public void setTimeCallback(ProfileAdapter.TimePickerCallbacks callback) {
         this.callback = callback;
+    }
+
+    public TimePickerFragment setCloseRunnable(final Runnable runnable) {
+        this.closeRunnable = runnable;
+        return this;
     }
 
     @Override
     public Dialog onCreateDialog(Bundle savedInstanceState) {
 
-        return new TimePickerDialog(getActivity(), this, this.hour, this.minute,
+        final TimePickerDialog tp = new TimePickerDialog(getActivity(), this, this.hour, this.minute,
                 DateFormat.is24HourFormat(getActivity()));
+        if (title != null) tp.setTitle(title);
+        return tp;
+    }
+
+    @Override
+    public void onDetach() {
+        super.onDetach();
+        if (closeRunnable != null) {
+            closeRunnable.run();
+        }
     }
 
     //onTimeSet() callback method

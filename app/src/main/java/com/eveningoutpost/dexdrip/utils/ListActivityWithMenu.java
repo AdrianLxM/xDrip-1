@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.support.v4.widget.DrawerLayout;
 
+import com.eveningoutpost.dexdrip.BaseListActivity;
 import com.eveningoutpost.dexdrip.NavDrawerBuilder;
 import com.eveningoutpost.dexdrip.NavigationDrawerFragment;
 import com.eveningoutpost.dexdrip.R;
@@ -12,9 +13,9 @@ import com.eveningoutpost.dexdrip.R;
 import java.util.List;
 
 /**
- * Created by stephenblack on 6/8/15.
+ * Created by Emma Black on 6/8/15.
  */
-public abstract class ListActivityWithMenu extends ListActivity implements NavigationDrawerFragment.NavigationDrawerCallbacks {
+public abstract class ListActivityWithMenu extends BaseListActivity implements NavigationDrawerFragment.NavigationDrawerCallbacks {
     private int menu_position;
     private String menu_name;
     private NavigationDrawerFragment mNavigationDrawerFragment;

@@ -15,7 +15,7 @@ import java.text.DateFormat;
 import java.util.Date;
 
 /**
- * Created by stephenblack on 1/14/15.
+ * Created by Emma Black on 1/14/15.
  */
 @Table(name = "ActiveBgAlert", id = BaseColumns._ID)
 public class ActiveBgAlert extends Model {
@@ -27,18 +27,18 @@ public class ActiveBgAlert extends Model {
     public String alert_uuid;
 
     @Column(name = "is_snoozed")
-    public boolean is_snoozed;
+    public volatile boolean is_snoozed;
 
     @Column(name = "last_alerted_at") // Do we need this
-    public Long last_alerted_at;
+    public volatile Long last_alerted_at;
 
     @Column(name = "next_alert_at")
-    public Long next_alert_at;
+    public volatile Long next_alert_at;
 
     // This is needed in order to have ascending alerts
     // we set the real value of it when is_snoozed is being turned to false
     @Column(name = "alert_started_at")
-    public Long alert_started_at;
+    public volatile Long alert_started_at;
 
 
     public boolean ready_to_alarm() {
@@ -72,18 +72,23 @@ public class ActiveBgAlert extends Model {
 
     public String toString() {
 
-        String alert_uuid = "alert_uuid: " + this.alert_uuid;
-        String is_snoozed = "is_snoozed: " + this.is_snoozed;
-        String last_alerted_at = "last_alerted_at: " + DateFormat.getDateTimeInstance(
-                DateFormat.LONG, DateFormat.LONG).format(new Date(this.last_alerted_at));
-        String next_alert_at = "next_alert_at: " + DateFormat.getDateTimeInstance(
-                DateFormat.LONG, DateFormat.LONG).format(new Date(this.next_alert_at));
+        try {
+            String alert_uuid = "alert_uuid: " + this.alert_uuid;
+            String is_snoozed = "is_snoozed: " + this.is_snoozed;
+            String last_alerted_at = "last_alerted_at: " + DateFormat.getDateTimeInstance(
+                    DateFormat.LONG, DateFormat.LONG).format(new Date(this.last_alerted_at));
+            String next_alert_at = "next_alert_at: " + DateFormat.getDateTimeInstance(
+                    DateFormat.LONG, DateFormat.LONG).format(new Date(this.next_alert_at));
 
-        String alert_started_at = "alert_started_at: " + DateFormat.getDateTimeInstance(
-                DateFormat.LONG, DateFormat.LONG).format(new Date(this.alert_started_at));
+            String alert_started_at = "alert_started_at: " + DateFormat.getDateTimeInstance(
+                    DateFormat.LONG, DateFormat.LONG).format(new Date(this.alert_started_at));
 
-        return alert_uuid + " " + is_snoozed + " " + last_alerted_at + " "+ next_alert_at + " " + alert_started_at;
+            return alert_uuid + " " + is_snoozed + " " + last_alerted_at + " " + next_alert_at + " " + alert_started_at;
 
+        } catch (NullPointerException e) {
+            Log.e(TAG, "Got Nullpointer exception in toString()! " + e);
+            return "Nullpointer exception in toString!";
+        }
     }
 
     // We should only have at most one active alert at any given time.
@@ -106,7 +111,10 @@ public class ActiveBgAlert extends Model {
     }
 
     public static AlertType alertTypegetOnly() {
-        ActiveBgAlert aba = getOnly();
+        return alertTypegetOnly(getOnly());
+    }
+
+    public static AlertType alertTypegetOnly(final ActiveBgAlert aba) {
 
         if (aba == null) {
             Log.v(TAG, "ActiveBgAlert: alertTypegetOnly returning null");
@@ -163,7 +171,7 @@ public class ActiveBgAlert extends Model {
     // This function is called from ClockTick, when we play
     // If we were snoozed, we update the snooze to false, and update the start time.
     // return the time in minutes from the time playing the alert has started
-    public int getUpdatePlayTime() {
+    public int getAndUpdateAlertingMinutes() {
         if(is_snoozed) {
             is_snoozed = false;
             alert_started_at = new Date().getTime();

@@ -3,6 +3,7 @@ package com.eveningoutpost.dexdrip.UtilityModels;
 // jamorham
 
 import android.Manifest;
+import android.app.DownloadManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -26,36 +27,44 @@ import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
 
+import com.eveningoutpost.dexdrip.BaseAppCompatActivity;
 import com.eveningoutpost.dexdrip.BuildConfig;
 import com.eveningoutpost.dexdrip.Models.JoH;
 import com.eveningoutpost.dexdrip.Models.UserError;
 import com.eveningoutpost.dexdrip.R;
 import com.eveningoutpost.dexdrip.xdrip;
-import com.squareup.okhttp.OkHttpClient;
-import com.squareup.okhttp.Request;
-import com.squareup.okhttp.Response;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.SocketTimeoutException;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class UpdateActivity extends AppCompatActivity {
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
 
-    private static final String autoUpdatePrefsName = "auto_update_download";
+import static com.eveningoutpost.dexdrip.UtilityModels.OkHttpWrapper.enableTls12OnPreLollipop;
+
+public class UpdateActivity extends BaseAppCompatActivity {
+
+    public static final String AUTO_UPDATE_PREFS_NAME = "auto_update_download";
     private static final String useInternalDownloaderPrefsName = "use_internal_downloader";
     private static final String last_update_check_time = "last_update_check_time";
     private static final String TAG = "jamorham update";
     private static OkHttpClient httpClient = null;
-    public static double last_check_time = 0;
+    public static long last_check_time = 0;
     private static SharedPreferences prefs;
     private static int versionnumber = 0;
     private static int newversion = 0;
+    private static String lastDigest = "";
     private final static int MY_PERMISSIONS_REQUEST_STORAGE_DOWNLOAD = 105;
     private static boolean downloading = false;
     private static final boolean debug = false;
@@ -67,15 +76,16 @@ public class UpdateActivity extends AppCompatActivity {
     private static String DOWNLOAD_URL = "";
     private static int FILE_SIZE = -1;
     private static String MESSAGE = "";
+    private static String CHECKSUM = "";
 
     public static void checkForAnUpdate(final Context context) {
         if (prefs == null) prefs = PreferenceManager.getDefaultSharedPreferences(context);
-        if (!prefs.getBoolean(autoUpdatePrefsName, true)) return;
+        if ((last_check_time != -1) && (!prefs.getBoolean(AUTO_UPDATE_PREFS_NAME, true))) return;
         if (last_check_time == 0)
-            last_check_time = (double) prefs.getLong(last_update_check_time, 0);
-        if (((JoH.ts() - last_check_time) > 86300000) || (debug)) {
-            last_check_time = JoH.ts();
-            prefs.edit().putLong(last_update_check_time, (long) last_check_time).apply();
+            last_check_time = prefs.getLong(last_update_check_time, 0);
+        if (((JoH.tsl() - last_check_time) > 86300000) || (debug)) {
+            last_check_time = JoH.tsl();
+            prefs.edit().putLong(last_update_check_time, last_check_time).apply();
 
             String channel = prefs.getString("update_channel", "beta");
             Log.i(TAG, "Checking for a software update, channel: " + channel);
@@ -90,85 +100,89 @@ public class UpdateActivity extends AppCompatActivity {
             DOWNLOAD_URL = "";
             newversion = 0;
 
-            new Thread(new Runnable() {
-                public void run() {
-                    try {
-
-                        if (httpClient == null) {
-                            httpClient = new OkHttpClient();
-                            httpClient.setConnectTimeout(30, TimeUnit.SECONDS);
-                            httpClient.setReadTimeout(60, TimeUnit.SECONDS);
-                            httpClient.setWriteTimeout(20, TimeUnit.SECONDS);
-                        }
-                        getVersionInformation(context);
-                        if (versionnumber == 0) return;
-
-                        String locale = "";
-                        try {
-                            locale = Locale.getDefault().toString();
-                            if (locale == null) locale = "";
-                        } catch (Exception e) {
-                            // do nothing
-                        }
-
-
-                        Request request = new Request.Builder()
-                                // Mozilla header facilitates compression
-                                .header("User-Agent", "Mozilla/5.0")
-                                .header("Connection", "close")
-                                .url(CHECK_URL + "?r=" + Long.toString((System.currentTimeMillis() / 100000) % 9999999) + "&ln=" + JoH.urlEncode(locale))
+            new Thread(() -> {
+                try {
+                    if (httpClient == null) {
+                        httpClient = enableTls12OnPreLollipop(new OkHttpClient.Builder()
+                                .connectTimeout(30, TimeUnit.SECONDS)
+                                .readTimeout(60, TimeUnit.SECONDS)
+                                .writeTimeout(20, TimeUnit.SECONDS))
                                 .build();
-
-                        Response response = httpClient.newCall(request).execute();
-                        if (response.isSuccessful()) {
-
-                            final String lines[] = response.body().string().split("\\r?\\n");
-                            if (lines.length > 1) {
-                                try {
-                                    newversion = Integer.parseInt(lines[0]);
-                                    if ((newversion > versionnumber) || (debug)) {
-                                        if (lines[1].startsWith("http")) {
-                                            Log.i(TAG, "Notifying user of new update available our version: " + versionnumber + " new: " + newversion);
-                                            DOWNLOAD_URL = lines[1];
-                                            if (lines.length > 2) {
-                                                try {
-                                                    FILE_SIZE = Integer.parseInt(lines[2]);
-                                                } catch (NumberFormatException | NullPointerException e) {
-                                                    Log.e(TAG, "Got exception processing update download parameters");
-                                                }
-                                            } else {
-                                                FILE_SIZE = -1;
-                                            }
-                                            if (lines.length > 3) {
-                                                MESSAGE = lines[3];
-                                            } else {
-                                                MESSAGE = "";
-                                            }
-                                            Intent intent = new Intent(context, UpdateActivity.class);
-                                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                                            context.startActivity(intent);
-
-                                        } else {
-                                            Log.e(TAG, "Error parsing second line of update reply");
-                                        }
-                                    } else {
-                                        Log.i(TAG, "Our current version is the most recent: " + versionnumber + " vs " + newversion);
-                                    }
-                                } catch (Exception e) {
-                                    Log.e(TAG, "Got exception parsing update version: " + e.toString());
-                                }
-                            } else {
-                                Log.d(TAG, "zero lines received in reply");
-                            }
-                            Log.i(TAG, "Success getting latest software version");
-                        } else {
-                            Log.d(TAG, "Failure getting update URL data: code: " + response.code());
-                        }
-                    } catch (Exception e) {
-                        UserError.Log.e(TAG, "Exception in reading http update version " + e.toString());
                     }
-                    httpClient = null; // for GC
+                    getVersionInformation(context);
+                    if (versionnumber == 0) return;
+
+                    String locale = "";
+                    try {
+                        locale = Locale.getDefault().toString();
+                        if (locale == null) locale = "";
+                    } catch (Exception e) {
+                        // do nothing
+                    }
+
+
+                    final Request request = new Request.Builder()
+                            // Mozilla header facilitates compression
+                            .header("User-Agent", "Mozilla/5.0")
+                            .header("Connection", "close")
+                            .url(CHECK_URL + "?r=" + Long.toString((System.currentTimeMillis() / 100000) % 9999999) + "&ln=" + JoH.urlEncode(locale))
+                            .build();
+
+                    final Response response = httpClient.newCall(request).execute();
+                    if (response.isSuccessful()) {
+
+                        final String lines[] = response.body().string().split("\\r?\\n");
+                        if (lines.length > 1) {
+                            try {
+                                newversion = Integer.parseInt(lines[0]);
+                                if ((newversion > versionnumber) || (debug)) {
+                                    if (lines[1].startsWith("http")) {
+                                        Log.i(TAG, "Notifying user of new update available our version: " + versionnumber + " new: " + newversion);
+                                        DOWNLOAD_URL = lines[1];
+                                        if (lines.length > 2) {
+                                            try {
+                                                FILE_SIZE = Integer.parseInt(lines[2]);
+                                            } catch (NumberFormatException | NullPointerException e) {
+                                                Log.e(TAG, "Got exception processing update download parameters");
+                                            }
+                                        } else {
+                                            FILE_SIZE = -1;
+                                        }
+                                        if (lines.length > 3) {
+                                            MESSAGE = lines[3];
+                                        } else {
+                                            MESSAGE = "";
+                                        }
+                                        if (lines.length > 4) {
+                                            CHECKSUM = lines[4];
+                                        } else {
+                                            CHECKSUM = "";
+                                        }
+
+                                        final Intent intent = new Intent(context, UpdateActivity.class);
+                                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                                        context.startActivity(intent);
+
+                                    } else {
+                                        Log.e(TAG, "Error parsing second line of update reply");
+                                    }
+                                } else {
+                                    Log.i(TAG, "Our current version is the most recent: " + versionnumber + " vs " + newversion);
+                                }
+                            } catch (Exception e) {
+                                Log.e(TAG, "Got exception parsing update version: " + e.toString());
+                            }
+                        } else {
+                            Log.d(TAG, "zero lines received in reply");
+                        }
+                        Log.i(TAG, "Success getting latest software version");
+                    } else {
+                        Log.d(TAG, "Failure getting update URL data: code: " + response.code());
+                    }
+                } catch (Exception e) {
+                    UserError.Log.e(TAG, "Exception in reading http update version " + e.toString());
                 }
+                httpClient = null; // for GC
             }).start();
         }
     }
@@ -182,12 +196,8 @@ public class UpdateActivity extends AppCompatActivity {
     private static void getVersionInformation(Context context) {
         // try {
         if (versionnumber == 0) {
-            //versionnumber = context.getPackageManager().getPackageInfo(context.getPackageName(), PackageManager.GET_META_DATA).versionCode;
             versionnumber = BuildConfig.buildVersion;
         }
-        // } catch (PackageManager.NameNotFoundException e) {
-        //    Log.e(TAG, "PackageManager.NameNotFoundException:" + e.getMessage());
-        // }
     }
 
     @Override
@@ -205,11 +215,11 @@ public class UpdateActivity extends AppCompatActivity {
         updateMessageText = (TextView) findViewById(R.id.updatemessage);
 
         Switch autoUpdateSwitch = (Switch) findViewById(R.id.autoupdate);
-        autoUpdateSwitch.setChecked(prefs.getBoolean(autoUpdatePrefsName, true));
+        autoUpdateSwitch.setChecked(prefs.getBoolean(AUTO_UPDATE_PREFS_NAME, true));
         autoUpdateSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
             public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                prefs.edit().putBoolean(autoUpdatePrefsName, isChecked).commit();
+                prefs.edit().putBoolean(AUTO_UPDATE_PREFS_NAME, isChecked).commit();
                 Log.d(TAG, "Auto Updates IsChecked:" + isChecked);
             }
         });
@@ -257,7 +267,7 @@ public class UpdateActivity extends AppCompatActivity {
 
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == MY_PERMISSIONS_REQUEST_STORAGE_DOWNLOAD) {
-            if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            if ((grantResults.length > 0) && (grantResults[0] == PackageManager.PERMISSION_GRANTED)) {
                 downloadNow(null);
             } else {
                 JoH.static_toast_long(this, "Cannot download without storage permission");
@@ -286,8 +296,7 @@ public class UpdateActivity extends AppCompatActivity {
                     JoH.static_toast_long(this, "Need permission to download file");
                 }
             } else {
-                Intent downloadActivity = new Intent(Intent.ACTION_VIEW, Uri.parse(DOWNLOAD_URL + "&rr=" + JoH.qs(JoH.ts())));
-                startActivity(downloadActivity);
+                viewIntentDownload(DOWNLOAD_URL);
                 finish();
             }
 
@@ -296,10 +305,23 @@ public class UpdateActivity extends AppCompatActivity {
         }
     }
 
+    private void viewIntentDownload(final String DOWNLOAD_URL) {
+        final Intent downloadActivity = new Intent(Intent.ACTION_VIEW, Uri.parse(DOWNLOAD_URL + "&rr=" + JoH.tsl()));
+        startActivity(downloadActivity);
+    }
+
     // TODO WebAppHelper could/should implement these features too or we could use the download manager
     private class AsyncDownloader extends AsyncTask<Void, Long, Boolean> {
-        private final String URL = DOWNLOAD_URL + "&rr=" + JoH.qs(JoH.ts());
-        private final OkHttpClient client = new OkHttpClient();
+        private final String URL = DOWNLOAD_URL + "&rr=" + JoH.tsl();
+
+        private final OkHttpClient.Builder okbuilder = new OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
+                .followRedirects(true)
+                .followSslRedirects(true);
+
+        private final OkHttpClient client = enableTls12OnPreLollipop(okbuilder).build();
         private String filename;
 
         @Override
@@ -312,9 +334,6 @@ public class UpdateActivity extends AppCompatActivity {
                     .url(URL)
                     .build();
 
-            client.setConnectTimeout(15, TimeUnit.SECONDS);
-            client.setReadTimeout(30, TimeUnit.SECONDS);
-            client.setWriteTimeout(30, TimeUnit.SECONDS);
 
             try {
                 final Response response = client.newCall(request).execute();
@@ -324,16 +343,22 @@ public class UpdateActivity extends AppCompatActivity {
                     filename = matcher.group(1);
                 } else {
                     filename = "";
+                    final Matcher matcher2 = Pattern.compile("/([^/]*?.apk)").matcher(URL);
+                    if (matcher2.find()) {
+                        filename = matcher2.group(1);
+                    }
                 }
                 if (filename.length() < 5) {
-                    filename = "xDrip-plus-" + Integer.toString(newversion);
+                    filename = "xDrip-plus-" + Integer.toString(newversion) + ".apk";
                 }
 
                 Log.d(TAG, "Filename: " + filename);
                 if (response.code() == 200) {
+                    lastDigest = "";
                     InputStream inputStream = null;
                     FileOutputStream outputStream = null;
                     try {
+
                         dest_file = new File(getDownloadFolder(), filename);
                         try {
                             if (dest_file.exists())
@@ -341,9 +366,17 @@ public class UpdateActivity extends AppCompatActivity {
                         } catch (Exception e) {
                             Log.e(TAG, "Got exception deleting existing file: " + e);
                         }
-                        ;
+
                         outputStream = new FileOutputStream(dest_file);
                         inputStream = response.body().byteStream();
+                        MessageDigest messageDigest = null;
+                        DigestInputStream digestInputStream = null;
+                        try {
+                            messageDigest = MessageDigest.getInstance("SHA256");
+                            digestInputStream = new DigestInputStream(inputStream, messageDigest);
+                        } catch (NoSuchAlgorithmException e) {
+                            //
+                        }
                         byte[] buff = new byte[1024 * 4];
                         long downloaded = 0;
                         long target = response.body().contentLength();
@@ -351,7 +384,8 @@ public class UpdateActivity extends AppCompatActivity {
                             target = FILE_SIZE; // get this from update server alternately
                         publishProgress(0L, target);
                         while (true) {
-                            int last_read = inputStream.read(buff);
+
+                            int last_read = (digestInputStream != null) ? digestInputStream.read(buff) : inputStream.read(buff);
                             if (last_read == -1) {
                                 break;
                             }
@@ -362,7 +396,10 @@ public class UpdateActivity extends AppCompatActivity {
                                 return false;
                             }
                         }
+                        if (messageDigest != null)
+                            lastDigest = JoH.bytesToHex(messageDigest.digest()).toLowerCase();
                         return downloaded == target;
+
                     } catch (IOException e) {
                         Log.e(TAG, "Download error: " + e.toString());
                         JoH.static_toast_long(getApplicationContext(), "Data error: ");
@@ -383,6 +420,12 @@ public class UpdateActivity extends AppCompatActivity {
                 return false;
             } catch (IOException e) {
                 Log.e(TAG, "Exception in download: " + e);
+                if (e instanceof javax.net.ssl.SSLHandshakeException) {
+                    if (JoH.ratelimit("internal-update-fallback", 15)) {
+                        JoH.static_toast_long("Internal problems - trying with android system");
+                        viewIntentDownload(URL);
+                    }
+                }
                 return false;
             }
         }
@@ -409,16 +452,33 @@ public class UpdateActivity extends AppCompatActivity {
             downloading = false;
             if (result) {
                 if ((filename != null) && (filename.length() > 5) && (dest_file != null)) {
-                    try {
-                        final Intent installapk = new Intent(Intent.ACTION_VIEW);
-                        installapk.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                        installapk.setDataAndType(Uri.fromFile(dest_file), "application/vnd.android.package-archive");
-                        startActivity(installapk);
+                    if ((CHECKSUM.length() == 0) || (lastDigest.length() == 0) || (CHECKSUM.equals(lastDigest))) {
+                        try {
+                            try {
+                                DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                                dm.addCompletedDownload(filename, "xDrip+ update version " + newversion, false, "application/vnd.android.package-archive", getDownloadFolder() + "/" + filename, FILE_SIZE, true);
+                            } catch (Exception e) {
+                                Log.e(TAG, "Download manager error: " + e);
+                            }
+
+                            final Intent installapk = new Intent(Intent.ACTION_VIEW);
+                            installapk.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            installapk.setDataAndType(Uri.fromFile(dest_file), "application/vnd.android.package-archive");
+                            startActivity(installapk);
+                            finish();
+                        } catch (Exception e) {
+                            Log.e(TAG, "Got exception trying to install apk: " + e);
+                            JoH.static_toast_long(getApplicationContext(), "Update is in your downloads folder");
+                        }
+                    } else {
+                        Log.e(TAG, "Checksum doesn't match: " + lastDigest + " vs " + CHECKSUM);
+                        try {
+                            dest_file.delete();
+                        } catch (Exception e) {
+                            Log.e(TAG, "Got exception deleting corrupt file: " + e);
+                        }
+                        JoH.static_toast_long("File appears corrupt!");
                         finish();
-                    } catch (Exception e) {
-                        Log.e(TAG, "Got exception trying to install apk: " + e);
-                        JoH.static_toast_long(getApplicationContext(), "Update is in your downloads folder");
-                        prefs.edit().putBoolean(useInternalDownloaderPrefsName, false).apply(); // turn off as borked
                     }
                 }
             } else {
@@ -432,5 +492,9 @@ public class UpdateActivity extends AppCompatActivity {
             }
 
         }
+    }
+
+    public static void clearLastCheckTime() {
+        Pref.setLong(last_update_check_time,0L);
     }
 }

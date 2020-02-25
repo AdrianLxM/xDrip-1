@@ -7,11 +7,13 @@ import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.format.DateFormat;
-import com.eveningoutpost.dexdrip.Models.UserError.Log;
 import android.widget.Toast;
 
 import com.activeandroid.Cache;
 import com.activeandroid.Configuration;
+import com.eveningoutpost.dexdrip.Models.JoH;
+import com.eveningoutpost.dexdrip.Models.UserError.Log;
+import com.eveningoutpost.dexdrip.UtilityModels.Pref;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -26,7 +28,8 @@ import java.util.Date;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
-import static com.eveningoutpost.dexdrip.utils.FileUtils.*;
+import static com.eveningoutpost.dexdrip.utils.FileUtils.getExternalDir;
+import static com.eveningoutpost.dexdrip.utils.FileUtils.makeSureDirectoryExists;
 
 /**
  * Save the SQL database to file.
@@ -34,7 +37,7 @@ import static com.eveningoutpost.dexdrip.utils.FileUtils.*;
 public class DatabaseUtil {
 
     private static final String TAG = DatabaseUtil.class.getSimpleName();
-    private static final int BUFFER_SIZE =  2048;
+    private static final int BUFFER_SIZE = 4096;
     private static final Handler handler = new Handler(Looper.getMainLooper());
 
     private static void toastText(final Context context, final String text) {
@@ -47,11 +50,17 @@ public class DatabaseUtil {
     }
 
     public static String saveSql(Context context) {
+        // TecMunky 6/23/17 overload saveSql function to call modified function
+        return DatabaseUtil.saveSql(context, "export");
+    }
+
+    public static String saveSql(Context context, String prefix) {
+        // TecMunky 6/23/17 modify function with added prefix string variable
 
         FileInputStream srcStream = null;
         BufferedInputStream biStream = null;
         FileOutputStream foStream = null;
-        ZipOutputStream zipOutputStream =null;
+        ZipOutputStream zipOutputStream = null;
         String zipFilename = null;
 
 
@@ -64,7 +73,10 @@ public class DatabaseUtil {
 
             final StringBuilder sb = new StringBuilder();
             sb.append(dir);
-            sb.append("/export");
+            //sb.append("/export");
+            // TecMunky 6/23/17 replace "/export" with "/" and prefix
+            sb.append("/");
+            sb.append(prefix);
             sb.append(DateFormat.format("yyyyMMdd-kkmmss", System.currentTimeMillis()));
             sb.append(".zip");
             zipFilename = sb.toString();
@@ -74,17 +86,19 @@ public class DatabaseUtil {
                 final File zipOutputFile = new File(zipFilename);
                 if (currentDB.exists()) {
                     srcStream = new FileInputStream(currentDB);
-                    biStream =  new BufferedInputStream(srcStream, BUFFER_SIZE);
+                    biStream = new BufferedInputStream(srcStream, BUFFER_SIZE);
 
                     foStream = new FileOutputStream(zipOutputFile);
                     zipOutputStream = new ZipOutputStream(new BufferedOutputStream(foStream));
-                    zipOutputStream.putNextEntry(new ZipEntry("export" + DateFormat.format("yyyyMMdd-kkmmss", System.currentTimeMillis()) + ".sqlite"));
+                    zipOutputStream.putNextEntry(new ZipEntry(prefix + DateFormat.format("yyyyMMdd-kkmmss", System.currentTimeMillis()) + ".sqlite"));
 
                     byte buffer[] = new byte[BUFFER_SIZE];
                     int count;
                     while ((count = biStream.read(buffer, 0, BUFFER_SIZE)) != -1) {
                         zipOutputStream.write(buffer, 0, count);
                     }
+                    if (!zipFilename.contains("b4import"))
+                        Pref.setString("last-saved-database-zip", zipFilename);
                 } else {
                     toastText(context, "Problem: No current DB found!");
                     Log.d(TAG, "Problem: No current DB found");
@@ -111,6 +125,7 @@ public class DatabaseUtil {
                 Log.e(TAG, "Something went wrong closing: ", e1);
             }
         }
+        JoH.clearCache();
         return zipFilename;
     }
 
@@ -186,18 +201,16 @@ public class DatabaseUtil {
 
     /**
      * Generate a csv that can be imported by SiDiary
-     * */
-    public static String saveCSV(Context context) {
+     */
+    public static String saveCSV(Context context, long from) {
 
         FileOutputStream foStream = null;
         PrintStream printStream = null;
-        ZipOutputStream zipOutputStream =null;
+        ZipOutputStream zipOutputStream = null;
         String zipFilename = null;
 
 
         try {
-
-            final String databaseName = new Configuration.Builder(context).create().getDatabaseName();
 
             final String dir = getExternalDir();
             makeSureDirectoryExists(dir);
@@ -217,29 +230,66 @@ public class DatabaseUtil {
                 zipOutputStream.putNextEntry(new ZipEntry("export" + DateFormat.format("yyyyMMdd-kkmmss", System.currentTimeMillis()) + ".csv"));
                 printStream = new PrintStream(zipOutputStream);
 
-                printStream.println("DAY;TIME;UDT_CGMS");
-
+                //add Treatment and BGlucose Header
+                printStream.println("DAY;TIME;UDT_CGMS;BG_LEVEL;CH_GR;BOLUS;REMARK");
 
                 SQLiteDatabase db = Cache.openDatabase();
-                //Cursor cur = db.query("bgreadings", new String[]{"timestamp", "calculated_value"}, "timestamp >= ? AND timestamp <=  ? AND calculated_value > ?", new String[]{"" + bounds.start, "" + bounds.stop, CUTOFF}, null, null, orderBy);
 
-                Cursor cur = db.query("bgreadings", new String[]{"timestamp", "calculated_value"}, null, null, null, null, null);
-
+                // Set all needed Vars
                 double value;
+                String valueIE;
+                String valueCHO;
+                String notes;
+
                 long timestamp;
+
                 java.text.DateFormat df = new SimpleDateFormat("dd.MM.yyyy;HH:mm;");
+                //df.setTimeZone(TimeZone.getDefault()); did not change the time-slope, so turned it off...
+
                 Date date = new Date();
 
+                //Extract CGMS-Values
+                Cursor cur = db.query("bgreadings", new String[]{"timestamp", "calculated_value"}, "timestamp >= " + from, null, null, null, "timestamp ASC");//KS
                 if (cur.moveToFirst()) {
                     do {
                         timestamp = cur.getLong(0);
                         value = cur.getDouble(1);
-                        if(value > 13){
+                        if (value > 13) {
                             date.setTime(timestamp);
-                            printStream.println(df.format(date) + Math.round(value));
+                            printStream.println(df.format(date) + Math.round(value) + ";;;;");
                         }
+                    } while (cur.moveToNext());
+                }
 
+                //Extract Calibration-BG-Values
+                cur = db.query("Calibration", new String[]{"timestamp", "bg"}, "timestamp >= " + from, null, null, null, "timestamp ASC");
+                if (cur.moveToFirst()) {
+                    do {
+                        timestamp = cur.getLong(0);
+                        value = cur.getDouble(1);
+                        if (value > 0) {
+                            date.setTime(timestamp);
+                            printStream.println(df.format(date) + ";" + Math.round(value) + ";;;");
+                        }
+                    } while (cur.moveToNext());
+                }
 
+                //Extract Treatment-Values
+                cur = db.query("Treatments", new String[]{"timestamp", "carbs", "insulin", "notes"}, "timestamp >= " + from, null, null, null, "timestamp ASC");
+                if (cur.moveToFirst()) {
+                    do {
+                        timestamp = cur.getLong(0);
+                        valueCHO = cur.getString(1);
+                        valueIE = cur.getString(2);
+                        notes = cur.getString(3);
+                        if (notes == null) notes = "";
+                        if (valueIE.equals("0")) valueIE = "";
+                        if (valueCHO.equals("0")) valueCHO = "";
+                        notes= notes.replaceAll("\n","||"); //convert linefeed to SiDiary conform expression
+                        if (!valueIE.equals("") || !valueCHO.equals("") || !notes.equals("")) {
+                            date.setTime(timestamp);
+                            printStream.println(df.format(date) + ";;" + valueCHO + ";" + valueIE + ";" + notes);
+                        }
                     } while (cur.moveToNext());
                 }
 
@@ -268,8 +318,6 @@ public class DatabaseUtil {
     }
 
 
-
-
     public static String loadSql(Context context, String path) {
 
         FileInputStream srcStream = null;
@@ -282,6 +330,19 @@ public class DatabaseUtil {
         try {
             String databaseName = new Configuration.Builder(context).create().getDatabaseName();
             File currentDB = context.getDatabasePath(databaseName);
+            File currentDBold = context.getDatabasePath(databaseName + ".old");
+            File currentDBtmp = context.getDatabasePath(databaseName + ".tmp");
+
+            try {
+                currentDBold.delete();
+            } catch (Exception e) {
+                //
+            }
+            try {
+                currentDBtmp.delete();
+            } catch (Exception e) {
+                //
+            }
             File replacement = new File(path);
             if (!replacement.exists()) {
                 Log.d(TAG, "File does not exist: " + path);
@@ -290,9 +351,12 @@ public class DatabaseUtil {
             if (currentDB.canWrite()) {
                 srcStream = new FileInputStream(replacement);
                 src = srcStream.getChannel();
-                destStream = new FileOutputStream(currentDB);
+                destStream = new FileOutputStream(currentDBtmp);
                 dst = destStream.getChannel();
                 dst.transferFrom(src, 0, src.size());
+                currentDB.renameTo(currentDBold);
+                currentDBtmp.renameTo(currentDB);
+                currentDBold.delete();
                 returnString = "Successfully imported database";
             } else {
                 Log.v(TAG, "loadSql: No Write access");
@@ -325,6 +389,7 @@ public class DatabaseUtil {
                 Log.e(TAG, "Something went wrong closing: ", e1);
 
             }
+            JoH.fullDatabaseReset();
             return returnString;
         }
     }

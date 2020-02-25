@@ -1,6 +1,7 @@
 package com.eveningoutpost.dexdrip;
 
 import android.Manifest;
+import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -14,6 +15,7 @@ import android.os.Handler;
 import android.support.annotation.NonNull;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.ArrayAdapter;
@@ -24,17 +26,25 @@ import com.eveningoutpost.dexdrip.UtilityModels.CollectionServiceStarter;
 import com.eveningoutpost.dexdrip.utils.DatabaseUtil;
 import com.eveningoutpost.dexdrip.utils.FileUtils;
 import com.eveningoutpost.dexdrip.utils.ListActivityWithMenu;
+import com.eveningoutpost.dexdrip.wearintegration.WatchUpdaterService;
 
+import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileFilter;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+
+import static com.eveningoutpost.dexdrip.Home.startWatchUpdaterService;
 
 public class ImportDatabaseActivity extends ListActivityWithMenu {
     private final static String TAG = ImportDatabaseActivity.class.getSimpleName();
     public static String menu_name = "Import Database";
-    AlertDialog progressDialog;
     private Handler mHandler;
     private ArrayList<String> databaseNames;
     private ArrayList<File> databases;
@@ -46,8 +56,12 @@ public class ImportDatabaseActivity extends ListActivityWithMenu {
         super.onCreate(savedInstanceState);
         mHandler = new Handler();
         setContentView(R.layout.activity_import_db);
-
-        showWarningAndInstructions();
+        final String importit = getIntent().getStringExtra("importit");
+        if ((importit != null) && (importit.length() > 0)) {
+            importDB(new File(importit), this);
+        } else {
+            showWarningAndInstructions();
+        }
     }
 
     private void generateDBGui() {
@@ -111,8 +125,12 @@ public class ImportDatabaseActivity extends ListActivityWithMenu {
                 return path.isDirectory();
             }
         });
-        for (File subdirectory : subdirectories) {
-            addAllDatabases(subdirectory, databases);
+        try {
+            for (File subdirectory : subdirectories) {
+                addAllDatabases(subdirectory, databases);
+            }
+        } catch (NullPointerException e) {
+            // nothing found
         }
         return true;
     }
@@ -138,7 +156,7 @@ public class ImportDatabaseActivity extends ListActivityWithMenu {
         File[] files = file.listFiles(new FileFilter() {
             @Override
             public boolean accept(File pathname) {
-                return pathname.getPath().endsWith(".sqlite");
+                return pathname.getPath().endsWith(".sqlite") || pathname.getPath().endsWith(".zip");
             }
         });
         if ((databases != null) && (files != null)) {
@@ -204,19 +222,26 @@ public class ImportDatabaseActivity extends ListActivityWithMenu {
     }
 
 
-    public void importDB(int position) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+    private void importDB(int position) {
+        importDB(databases.get(position), this);
+    }
+
+    private void importDB(File the_file, Activity activity) {
+        AlertDialog.Builder builder = new AlertDialog.Builder(activity);
         builder.setTitle("Importing, please wait");
         builder.setMessage("Importing, please wait");
         AlertDialog dialog = builder.create();
         dialog.show();
         dialog.setMessage("Step 1: checking prerequisites");
         dialog.setCancelable(false);
-        LoadTask lt = new LoadTask(dialog, databases.get(position));
+        LoadTask lt = new LoadTask(dialog, the_file);
         lt.execute();
     }
 
     protected void postImportDB(String result) {
+
+        startWatchUpdaterService(this, WatchUpdaterService.ACTION_RESET_DB, TAG);
+
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setPositiveButton(R.string.ok, new DialogInterface.OnClickListener() {
             public void onClick(DialogInterface dialog, int id) {
@@ -228,9 +253,10 @@ public class ImportDatabaseActivity extends ListActivityWithMenu {
         AlertDialog dialog = builder.create();
         dialog.show();
 
+
     }
 
-    public void returnToHome() {
+    private void returnToHome() {
         Intent intent = new Intent(this, Home.class);
         CollectionServiceStarter.restartCollectionService(getApplicationContext());
         startActivity(intent);
@@ -240,7 +266,7 @@ public class ImportDatabaseActivity extends ListActivityWithMenu {
     private class LoadTask extends AsyncTask<Void, Void, String> {
 
         private final AlertDialog statusDialog;
-        private final File dbFile;
+        private File dbFile;
 
         LoadTask(AlertDialog statusDialog, File dbFile) {
             super();
@@ -251,7 +277,53 @@ public class ImportDatabaseActivity extends ListActivityWithMenu {
 
         protected String doInBackground(Void... args) {
             //Check if db has the correct version:
+            File delete_file = null;
             try {
+
+                if (dbFile.getAbsolutePath().endsWith(".zip")) {
+                    // uncompress first
+                    try {
+                        final FileInputStream fileInputStream = new FileInputStream(dbFile.getAbsolutePath());
+                        final ZipInputStream zip_stream = new ZipInputStream(new BufferedInputStream(fileInputStream));
+                        ZipEntry zipEntry = zip_stream.getNextEntry();
+                        if ((zipEntry != null) && zipEntry.isDirectory())
+                            zipEntry = zip_stream.getNextEntry();
+                        if (zipEntry != null) {
+                            String filename = zipEntry.getName();
+                            if (filename.endsWith(".sqlite")) {
+                                String output_filename = dbFile.getAbsolutePath().replaceFirst(".zip$", ".sqlite");
+                                FileOutputStream fout = new FileOutputStream(output_filename);
+                                byte[] buffer = new byte[4096];
+                                int count = 0;
+                                while ((count = zip_stream.read(buffer)) != -1) {
+                                    fout.write(buffer, 0, count);
+                                }
+                                fout.close();
+                                dbFile = new File(output_filename);
+                                delete_file = dbFile;
+                                Log.d(TAG, "New filename: " + output_filename);
+                            } else {
+                                String msg = "Cant find sqlite in zip file";
+                                JoH.static_toast_long(msg);
+                                return msg;
+                            }
+                            zip_stream.closeEntry();
+                        } else {
+                            String msg = "Invalid ZIP file";
+                            JoH.static_toast_long(msg);
+                            return msg;
+                        }
+
+                            zip_stream.close();
+                            fileInputStream.close();
+
+                    } catch (IOException e) {
+                        String msg = "Could not open file";
+                        JoH.static_toast_long(msg);
+                        return msg;
+                    }
+                }
+
                 SQLiteDatabase db = SQLiteDatabase.openDatabase(dbFile.getAbsolutePath(), null, SQLiteDatabase.OPEN_READONLY);
                 int version = db.getVersion();
                 db.close();
@@ -270,7 +342,7 @@ public class ImportDatabaseActivity extends ListActivityWithMenu {
                 }
             });
 
-            String export = DatabaseUtil.saveSql(getBaseContext());
+            String export = DatabaseUtil.saveSql(xdrip.getAppContext(), "b4import");
 
 
             if (export == null) {
@@ -285,9 +357,9 @@ public class ImportDatabaseActivity extends ListActivityWithMenu {
                 }
             });
 
-            String result = DatabaseUtil.loadSql(getBaseContext(), dbFile.getAbsolutePath());
-
-            statusDialog.dismiss();
+            String result = DatabaseUtil.loadSql(xdrip.getAppContext(), dbFile.getAbsolutePath());
+            if (delete_file != null) delete_file.delete();
+            statusDialog.dismiss();;
             return result;
         }
 

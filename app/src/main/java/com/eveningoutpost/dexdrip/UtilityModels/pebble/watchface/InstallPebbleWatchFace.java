@@ -2,6 +2,7 @@
 package com.eveningoutpost.dexdrip.UtilityModels.pebble.watchface;
 
 import android.Manifest;
+import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -14,9 +15,12 @@ import android.support.annotation.NonNull;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
 import android.support.v7.app.AppCompatActivity;
+import android.support.v7.widget.LinearLayoutCompat;
 import android.util.Log;
 import android.widget.Toast;
 
+import com.eveningoutpost.dexdrip.BaseAppCompatActivity;
+import com.eveningoutpost.dexdrip.Models.JoH;
 import com.eveningoutpost.dexdrip.Models.UserError;
 import com.eveningoutpost.dexdrip.R;
 
@@ -25,11 +29,13 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 
+import static com.eveningoutpost.dexdrip.xdrip.gs;
+
 /**
  * Created by jamorham on 22/04/2016.
  * modified by Andy, to be able to add additional PebbleWtatchFace, which can just extend this
  */
-public class InstallPebbleWatchFace extends AppCompatActivity {
+public class InstallPebbleWatchFace extends BaseAppCompatActivity {
 
     private final static int MY_PERMISSIONS_REQUEST_STORAGE = 99;
     private static String TAG = "InstallPebbleWatchFace";
@@ -58,10 +64,14 @@ public class InstallPebbleWatchFace extends AppCompatActivity {
             if (ContextCompat.checkSelfPermission(getApplicationContext(),
                     Manifest.permission.WRITE_EXTERNAL_STORAGE)
                     != PackageManager.PERMISSION_GRANTED) {
-                toast("Need permission to write watchface");
-                ActivityCompat.requestPermissions(this,
-                        new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
-                        MY_PERMISSIONS_REQUEST_STORAGE);
+                final Activity activity = this;
+                JoH.show_ok_dialog(activity, gs(R.string.please_allow_permission), "Need storage permission to install watchface", new Runnable() {
+                    @Override
+                    public void run() {
+                        ActivityCompat.requestPermissions(activity,
+                                new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, MY_PERMISSIONS_REQUEST_STORAGE);
+                    }
+                });
                 return false;
             }
         }
@@ -73,7 +83,7 @@ public class InstallPebbleWatchFace extends AppCompatActivity {
 
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == MY_PERMISSIONS_REQUEST_STORAGE) {
-            if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            if ((grantResults.length > 0) && (grantResults[0] == PackageManager.PERMISSION_GRANTED)) {
                 installFile();
                 finish();
             } else {

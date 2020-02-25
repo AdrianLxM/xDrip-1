@@ -33,8 +33,7 @@
 {"lexicon": "long",
     "matchWords":[
         "long",
-        "long acting",
-        "lantus"
+        "long acting"
     ]},
 
 {"lexicon": "carbs",
@@ -102,6 +101,13 @@
 
 {"lexicon": "units",
     "matchWords":[
+    ]},
+
+{"lexicon": "note",
+    "matchWords":[
+        "note",
+        "notes",
+        "night"
     ]}
 
 ]}

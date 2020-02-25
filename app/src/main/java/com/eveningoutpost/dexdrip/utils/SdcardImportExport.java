@@ -2,6 +2,7 @@ package com.eveningoutpost.dexdrip.utils;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Build;
@@ -9,16 +10,17 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
-import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
 import android.view.View;
 import android.widget.Toast;
 
+import com.eveningoutpost.dexdrip.BaseAppCompatActivity;
 import com.eveningoutpost.dexdrip.GcmActivity;
 import com.eveningoutpost.dexdrip.Home;
+import com.eveningoutpost.dexdrip.Models.AlertType;
 import com.eveningoutpost.dexdrip.Models.JoH;
 import com.eveningoutpost.dexdrip.R;
-import com.eveningoutpost.dexdrip.Models.AlertType;
+import com.eveningoutpost.dexdrip.UtilityModels.Pref;
 import com.eveningoutpost.dexdrip.xdrip;
 
 import java.io.File;
@@ -26,16 +28,22 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.List;
 
 import static com.eveningoutpost.dexdrip.utils.FileUtils.getExternalDir;
 
 
-public class SdcardImportExport extends AppCompatActivity {
+import static com.eveningoutpost.dexdrip.xdrip.gs;
+public class SdcardImportExport extends BaseAppCompatActivity {
 
     private final static String TAG = "jamorham sdcard";
     private final static int MY_PERMISSIONS_REQUEST_STORAGE = 104;
-    private final static String PREFERENCES_FILE = "shared_prefs/com.eveningoutpost.dexdrip_preferences.xml";
-    private static Activity activity;
+    public final static int TRIGGER_RESTORE_PERMISSIONS_REQUEST_STORAGE = 9104;
+    private final static String PREFERENCES_FILE = "shared_prefs/" + xdrip.getAppContext().getString(R.string.local_target_package) + "_preferences.xml";
+    private final static String EXPORT_FOLDER = "xDrip-export";
+    private static boolean backupDismissed;
+    //private static Activity activity;
     public static boolean deleteFolder(File path, boolean recursion) {
         try {
             Log.d(TAG, "deleteFolder called with: " + path.toString());
@@ -62,27 +70,35 @@ public class SdcardImportExport extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        activity = this;
+        //activity = this;
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_sdcard_import_export);
         JoH.fixActionBar(this);
 
         // SUPER DATABASE DEBUG COPY FOR NON ROOTED
         //directCopyFile(new File("/data/data/com.eveningoutpost.dexdrip/databases/DexDrip.db"),new File("/sdcard/DexDrip-debug.db"));
-
+        if (getIntent().getStringExtra("backup") != null) {
+            savePreferencesToSD(null);
+            finish();
+        }
     }
 
-    private boolean checkPermissions()
-    {
+    private boolean checkPermissions() {
+        return checkPermissions(this, true, MY_PERMISSIONS_REQUEST_STORAGE); // ask by default
+    }
+
+    // TODO refactor to own class
+    public static boolean checkPermissions(Activity context, boolean ask, int request_code) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            if (ContextCompat.checkSelfPermission(getApplicationContext(),
+            if (ContextCompat.checkSelfPermission(context,
                     Manifest.permission.WRITE_EXTERNAL_STORAGE)
                     != PackageManager.PERMISSION_GRANTED) {
-
-                ActivityCompat.requestPermissions(activity,
-                        new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
-                        MY_PERMISSIONS_REQUEST_STORAGE);
-                    return false;
+                if (ask) {
+                    ActivityCompat.requestPermissions(context,
+                            new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
+                            request_code);
+                }
+                return false;
             }
         }
         return true;
@@ -93,11 +109,18 @@ public class SdcardImportExport extends AppCompatActivity {
         if (savePreferencesToSD()) {
             toast(getString(R.string.preferences_saved_in_sdcard_downloads));
         } else {
-            toast(getString(R.string.could_not_write_to_sdcard_check_perms));
+            if (checkPermissions(this, false, MY_PERMISSIONS_REQUEST_STORAGE)) {
+                toast(getString(R.string.could_not_write_to_sdcard_check_perms));
+            }
         }
     }
 
     public static void hardReset() {
+        JoH.wakeUpIntent(xdrip.getAppContext(), 1000, Home.getHomePendingIntent());
+        hardReset_orig();
+    }
+
+    public static void hardReset_orig() {
         // shared preferences are cached so we need a hard restart
         GcmActivity.last_sync_request = 0;
         android.os.Process.killProcess(android.os.Process.myPid());
@@ -117,12 +140,23 @@ public class SdcardImportExport extends AppCompatActivity {
         hardReset();
     }
 
+    public static void deletePersistentStore() {
+        final String filename = "shared_prefs/persist_internal_store.xml";
+        if (deleteFolder(new File(xdrip.getAppContext().getFilesDir().getParent() + "/" + filename), false)) {
+            Log.d(TAG, "Successfully deleted: " + filename);
+        } else {
+            Log.e(TAG, "Error deleting: " + filename);
+        }
+        hardReset();
+    }
+
     public void loadPreferencesToSD(View myview) {
+        if (!checkPermissions()) return; // don't do toast if permission dialog needed
         if (loadPreferencesFromSD()) {
-            toast(getString(R.string.loaded_preferences_restarting));
+            JoH.static_toast_short(getString(R.string.loaded_preferences_restarting));
             hardReset();
         } else {
-            toast(getString(R.string.could_not_load_preferences_check_pers));
+            JoH.static_toast_short(getString(R.string.could_not_load_preferences_check_pers));
         }
     }
 
@@ -155,9 +189,9 @@ public class SdcardImportExport extends AppCompatActivity {
         if (isExternalStorageWritable()) {
             boolean succeeded = AlertType.toSettings(getApplicationContext());
             if (succeeded) {
-                succeeded &= dataToSDcopy(PREFERENCES_FILE);
+                succeeded = dataToSDcopy(PREFERENCES_FILE);
             }
-            Home.setPreferencesString("saved_alerts","");
+            Pref.setString("saved_alerts", "");
             return succeeded;
         } else {
             toast(getString(R.string.sdcard_not_writable_cannot_save));
@@ -180,12 +214,12 @@ public class SdcardImportExport extends AppCompatActivity {
         return Environment.MEDIA_MOUNTED.equals(state);
     }
 
-    private String getCustomSDcardpath() {
+    private static String getCustomSDcardpath() {
         return Environment.getExternalStoragePublicDirectory(
-                Environment.DIRECTORY_DOWNLOADS) + "/xDrip-export";
+                Environment.DIRECTORY_DOWNLOADS) + "/" + EXPORT_FOLDER;
     }
 
-    private String getxDripCustomSDcardpath() {
+    private static String getxDripCustomSDcardpath() {
         return getExternalDir() + "/settingsExport";
     }
 
@@ -212,23 +246,133 @@ public class SdcardImportExport extends AppCompatActivity {
                 return true;
             }
         } catch (Exception e) {
-            Log.e(TAG, "Error making directory: " + path.toString());
+            Log.e(TAG, "Error making directory: " + path);
             return false;
         }
         return false;
     }
 
+    // restore settings backup if there is one, produce dialogs for prompting and permissions as required
+    public static boolean handleBackup(final Activity activity) {
+        final List<String> results = findAnyBackups(activity);
+        if (!backupDismissed && (results != null) && (results.size() > 0)) {
+            Log.e(TAG, "Found: " + results.size() + " backup files");
+
+            final AlertDialog.Builder builder = new AlertDialog.Builder(activity);
+            builder.setTitle(gs(R.string.backup_detected));
+            builder.setMessage(gs(R.string.it_looks_like_you_maybe_have_a_settings_backup_shall_we_try_to_restore_it));
+
+            builder.setNegativeButton(R.string.no, (dialog, which) -> {
+                backupDismissed = true;
+                dialog.dismiss();
+            });
+
+            builder.setPositiveButton(gs(R.string.restore_settings), (dialog, which) -> {
+                if (checkPermissions(activity, true, TRIGGER_RESTORE_PERMISSIONS_REQUEST_STORAGE)) {
+                    // one entry do it!
+                    restoreSettingsNow(activity);
+                } else {
+                    handleBackup(activity); // try try again
+                }
+                dialog.dismiss();
+            });
+
+            builder.create().show();
+
+            return true; // something happened
+        } else {
+            return false; // no backup nada
+        }
+    }
+
+    public static void restoreSettingsNow(Activity activity) {
+        final List<String> results = findAnyBackups(activity);
+        if ((results != null) && (results.size() > 0)) {
+            JoH.static_toast_long("Restoring Settings");
+            if (copyPreferencesFileBack(activity, results.get(0))) {
+                Log.e(TAG, "Restoring preferences succeeded from first match: " + results.get(0));
+                hardReset();
+            } else {
+                JoH.static_toast_long("Couldn't restore preferences from: " + results.get(0));
+            }
+        }
+    }
+
+    private static List<String> findAnyBackups(Context context) {
+        final ArrayList<String> results = new ArrayList<>();
+
+        final File dest_file = new File(context.getFilesDir().getParent() + "/" + PREFERENCES_FILE);
+        final File source_file = new File(getCustomSDcardpath() + "/" + dest_file.getName());
+        final File source_file_xdrip = new File(getxDripCustomSDcardpath() + "/" + dest_file.getName());
+
+        if (source_file.exists()) results.add(source_file.getAbsolutePath());
+        if (source_file_xdrip.exists()) results.add(source_file_xdrip.getAbsolutePath());
+
+        final List<String> sdfolders = listAllDirectories("/storage", 2);
+        for (String folder : sdfolders) {
+            final String final_patha = folder + "/" + EXPORT_FOLDER + "/" + PREFERENCES_FILE;
+            final String final_pathb = folder + "/" + PREFERENCES_FILE;
+            if (new File(final_patha).exists()) results.add(final_patha);
+            if (new File(final_pathb).exists()) results.add(final_pathb);
+        }
+        return results;
+    }
+
+    public static List<String> listAllDirectories(String path, int depth) {
+        final ArrayList<String> results = new ArrayList<>();
+        Log.d(TAG, "Processing scan for directory: " + path + " depth: " + depth);
+        try {
+            final File[] files = new File(path).listFiles();
+            depth--;
+            if (files != null) {
+                for (File checkFile : files) {
+                    if (checkFile.isDirectory()) {
+                        results.add(checkFile.getAbsolutePath());
+                        if (depth > 0) {
+                            results.addAll(listAllDirectories(checkFile.getAbsolutePath(), depth));
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.d(TAG, "Got exception walking directories: " + e);
+        }
+        return results;
+    }
+
+
+    private static boolean copyPreferencesFileBack(Context context, String source_filename) {
+        final File dest_file = new File(context.getFilesDir().getParent() + "/" + PREFERENCES_FILE);
+        final File source_file = new File(source_filename);
+        if (source_file.exists()) {
+            try {
+                dest_file.mkdirs();
+                if (directCopyFile(source_file, dest_file)) {
+                    Log.i(TAG, "Copied success: " + source_filename);
+                    return true;
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error making directory: " + dest_file.toString());
+                return false;
+            }
+        } else {
+            Log.e(TAG, "Weirdly " + source_filename + " doesn't seem to exist or failed to copy somehow! " + dest_file.getAbsolutePath());
+        }
+        return false;
+    }
+
+
     private boolean dataFromSDcopy(String filename) {
         File dest_file = new File(getFilesDir().getParent() + "/" + filename);
         File source_file = new File(getCustomSDcardpath() + "/" + dest_file.getName());
         File source_file_xdrip = new File(getxDripCustomSDcardpath() + "/" + dest_file.getName());
+        Log.d(TAG, source_file.toString() + " or " + source_file_xdrip.toString() + " to: " + dest_file.toString());
 
-        if (source_file.exists() && source_file_xdrip.exists())
-        {
+
+        if (source_file.exists() && source_file_xdrip.exists()) {
             toast(getString(R.string.warning_settings_from_xdrip_and_plus_exist));
         } else {
-            if (source_file_xdrip.exists())
-            {
+            if (source_file_xdrip.exists()) {
                 source_file = source_file_xdrip;
                 toast(getString(R.string.loading_settings_from_xdrip_mainline));
             }
@@ -246,23 +390,19 @@ public class SdcardImportExport extends AppCompatActivity {
         return false;
     }
 
-    private boolean directCopyFile(File source_filename, File dest_filename) {
+    private static boolean directCopyFile(File source_filename, File dest_filename) {
         Log.i(TAG, "Attempt to copy: " + source_filename.toString() + " to " + dest_filename.toString());
-        InputStream in = null;
-        OutputStream out = null;
         try {
-            in = new FileInputStream(source_filename);
-            out = new FileOutputStream(dest_filename);
+            final InputStream in = new FileInputStream(source_filename);
+            final OutputStream out = new FileOutputStream(dest_filename);
             byte[] buffer = new byte[8192];
             int read;
             while ((read = in.read(buffer)) != -1) {
                 out.write(buffer, 0, read);
             }
             in.close();
-            in = null;
             out.flush();
             out.close();
-            out = null;
             return true;
         } catch (Exception e) {
             Log.e(TAG, e.getMessage());

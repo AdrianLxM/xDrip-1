@@ -7,12 +7,19 @@
         <item>русский</item>
         <item>Español</item>
         <item>Svenska</item>
+        <item>Bokmal</item>
         <item>Norsk</item>
         <item>Română</item>
         <item>Polski</item>
         <item>한국어</item>
         <item>Português</item>
         <item>čeština</item>
+        <item>Nederlands</item>
+        <item>Italiano</item>
+        <item>Suomi</item>
+        <item>Hrvatski</item>
+        <item>עברית</item>
+        <item>Slovenčina</item>
     </string-array>
     <string-array name="LocaleChoicesValues">
         <item>en</item>
@@ -21,11 +28,18 @@
         <item>ru</item>
         <item>es</item>
         <item>sv</item>
+        <item>nb</item>
         <item>no</item>
         <item>ro</item>
         <item>pl</item>
         <item>ko</item>
         <item>pt</item>
         <item>cs</item>
+        <item>nl</item>
+        <item>it</item>
+        <item>fi</item>
+        <item>hr</item>
+        <item>iw</item>
+        <item>sk</item>
     </string-array>
 </resources>

@@ -9,6 +9,8 @@ import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
 import android.os.PowerManager;
 import android.preference.PreferenceManager;
+
+import com.eveningoutpost.dexdrip.Models.JoH;
 import com.eveningoutpost.dexdrip.Models.UserError.Log;
 
 import com.eveningoutpost.dexdrip.ImportedLibraries.dexcom.records.CalRecord;
@@ -141,7 +143,7 @@ public class SyncingService extends IntentService {
                 Log.w("CALIBRATION-CHECK-IN: ", "Failed to acquire serial device");
             }
         } finally {
-            wl.release();
+            JoH.releaseWakeLock(wl);
         }
     }
 
@@ -234,10 +236,15 @@ public class SyncingService extends IntentService {
     private boolean acquireSerialDevice() {
         UsbDevice found_device = findDexcom();
 
-        if(mUsbManager == null) {
+        if (mUsbManager == null) {
             Log.w("CALIBRATION-CHECK-IN: ", "USB manager is null");
+            return false;
         }
 
+        if (dexcom == null) {
+            Log.e(TAG, "dex device == null");
+            return false;
+        }
 
         if( mUsbManager.hasPermission(dexcom)) {                                           // the system is allowing us to poke around this device
 
@@ -332,7 +339,7 @@ public class SyncingService extends IntentService {
     }
 
     private void broadcastSGVToUI() {
-        EGVRecord record=new EGVRecord(-1, Constants.TREND_ARROW_VALUES.NONE,new Date(),new Date());
+        EGVRecord record=new EGVRecord(-1, Dex_Constants.TREND_ARROW_VALUES.NONE,new Date(),new Date());
         broadcastSGVToUI(record,false, (long) (1000 * 60 * 5) + TIME_SYNC_OFFSET, new Date().getTime(), null, 0);
     }
 

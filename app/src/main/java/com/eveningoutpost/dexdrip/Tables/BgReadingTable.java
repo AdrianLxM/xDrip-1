@@ -1,8 +1,9 @@
 package com.eveningoutpost.dexdrip.Tables;
 
-import android.app.ListActivity;
+import android.app.AlertDialog;
 import android.content.Context;
-import android.database.Cursor;
+import android.content.DialogInterface;
+import android.graphics.Color;
 import android.os.Bundle;
 import android.support.v4.widget.DrawerLayout;
 import android.view.LayoutInflater;
@@ -12,16 +13,20 @@ import android.widget.BaseAdapter;
 import android.widget.ListAdapter;
 import android.widget.TextView;
 
+import com.eveningoutpost.dexdrip.BaseListActivity;
 import com.eveningoutpost.dexdrip.Models.BgReading;
+import com.eveningoutpost.dexdrip.Models.JoH;
 import com.eveningoutpost.dexdrip.NavigationDrawerFragment;
 import com.eveningoutpost.dexdrip.R;
+import com.eveningoutpost.dexdrip.UtilityModels.BgGraphBuilder;
+import com.eveningoutpost.dexdrip.UtilityModels.Pref;
 
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 
 
-public class BgReadingTable extends ListActivity implements NavigationDrawerFragment.NavigationDrawerCallbacks {
+public class BgReadingTable extends BaseListActivity implements NavigationDrawerFragment.NavigationDrawerCallbacks {
     private String menu_name = "BG Data Table";
     private NavigationDrawerFragment mNavigationDrawerFragment;
 
@@ -88,12 +93,55 @@ public class BgReadingTable extends ListActivity implements NavigationDrawerFrag
             return view;
         }
 
-        public void bindView(View view, Context context, BgReading bgReading) {
+        void bindView(View view, final Context context, final BgReading bgReading) {
             final BgReadingCursorAdapterViewHolder tag = (BgReadingCursorAdapterViewHolder) view.getTag();
-            tag.raw_data_id.setText(Double.toString(bgReading.calculated_value));
-            tag.raw_data_value.setText(Double.toString(bgReading.age_adjusted_raw_value));
-            tag.raw_data_slope.setText(Double.toString(bgReading.raw_data));
+            tag.raw_data_id.setText(BgGraphBuilder.unitized_string_with_units_static(bgReading.calculated_value)
+                    + "  " + JoH.qs(bgReading.calculated_value, 1)
+                    + " " + (!bgReading.isBackfilled() ? bgReading.slopeArrow() : ""));
+            tag.raw_data_value.setText("Aged raw: " + JoH.qs(bgReading.age_adjusted_raw_value, 2));
+            tag.raw_data_slope.setText(bgReading.isBackfilled() ? ("Backfilled" + " " + ((bgReading.source_info != null) ? bgReading.source_info : "")) : "Raw: " + JoH.qs(bgReading.raw_data, 2) + " " + ((bgReading.source_info != null) ? bgReading.source_info : ""));
             tag.raw_data_timestamp.setText(new Date(bgReading.timestamp).toString());
+
+            if (bgReading.ignoreForStats) {
+                // red invalid/cancelled/overridden
+                view.setBackgroundColor(Color.parseColor("#660000"));
+            } else {
+                // normal grey
+                view.setBackgroundColor(Color.parseColor("#212121"));
+            }
+
+            view.setLongClickable(true);
+            view.setOnLongClickListener(new View.OnLongClickListener() {
+                @Override
+                public boolean onLongClick(View v) {
+                    DialogInterface.OnClickListener dialogClickListener = new DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(DialogInterface dialog, int which) {
+                            switch (which){
+                                case DialogInterface.BUTTON_POSITIVE:
+                                    bgReading.ignoreForStats = true;
+                                    bgReading.save();
+                                    notifyDataSetChanged();
+                                    if (Pref.getBooleanDefaultFalse("wear_sync")) BgReading.pushBgReadingSyncToWatch(bgReading, false);
+                                    break;
+
+                                case DialogInterface.BUTTON_NEGATIVE:
+                                    bgReading.ignoreForStats = false;
+                                    bgReading.save();
+                                    notifyDataSetChanged();
+                                    if (Pref.getBooleanDefaultFalse("wear_sync")) BgReading.pushBgReadingSyncToWatch(bgReading, false);
+                                    break;
+                            }
+                        }
+                    };
+
+                    AlertDialog.Builder builder = new AlertDialog.Builder(context);
+                    builder.setMessage("Flag reading as \"bad\".\nFlagged readings have no impact on the statistics.").setPositiveButton("Yes", dialogClickListener)
+                            .setNegativeButton("No", dialogClickListener).show();
+                    return true;
+                }
+            });
+
         }
 
         @Override

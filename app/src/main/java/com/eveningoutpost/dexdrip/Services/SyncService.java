@@ -1,24 +1,20 @@
 package com.eveningoutpost.dexdrip.Services;
 
-import android.app.AlarmManager;
 import android.app.IntentService;
 import android.app.PendingIntent;
-import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
-import android.preference.PreferenceManager;
 
+import com.eveningoutpost.dexdrip.Models.JoH;
 import com.eveningoutpost.dexdrip.Models.UserError.Log;
-import com.eveningoutpost.dexdrip.UtilityModels.MongoSendTask;
+import com.eveningoutpost.dexdrip.UtilityModels.Constants;
+import com.eveningoutpost.dexdrip.UtilityModels.Pref;
+import com.eveningoutpost.dexdrip.UtilityModels.UploaderTask;
 import com.eveningoutpost.dexdrip.xdrip;
 
-import java.util.Calendar;
+import static com.eveningoutpost.dexdrip.UtilityModels.Constants.SYNC_QUEUE_RETRY_ID;
 
 public class SyncService extends IntentService {
-    private Context mContext;
-    private Boolean enableRESTUpload;
-    private Boolean enableMongoUpload;
-    private SharedPreferences prefs;
+    private static final String TAG = "SyncService";
 
     public SyncService() {
         super("SyncService");
@@ -26,33 +22,32 @@ public class SyncService extends IntentService {
 
     @Override
     protected void onHandleIntent(Intent intent) {
-        Log.d("SYNC SERVICE:", "STARTING INTENT SERVICE");
-        mContext = getApplicationContext();
-        prefs = PreferenceManager.getDefaultSharedPreferences(mContext);
-        enableRESTUpload = prefs.getBoolean("cloud_storage_api_enable", false);
-        enableMongoUpload = prefs.getBoolean("cloud_storage_mongodb_enable", false);
+        Log.d(TAG, "STARTING INTENT SERVICE");
         attemptSend();
     }
 
-    public void attemptSend() {
-        if (enableRESTUpload || enableMongoUpload) { syncToMongoDb(); }
-        setRetryTimer();
-    }
-
-    public void setRetryTimer() {
-        if (enableRESTUpload || enableMongoUpload) { //Check for any upload type being enabled
-            Calendar calendar = Calendar.getInstance();
-            AlarmManager alarm = (AlarmManager) getSystemService(ALARM_SERVICE);
-            long wakeTime = calendar.getTimeInMillis() + (1000 * 60 * 6);
-            // make it up on the next BG reading or retry if the reading doesn't materialize
-            // TODO THIS NEEDS UPDATING
-            PendingIntent serviceIntent = PendingIntent.getService(this, 0, new Intent(this, SyncService.class), PendingIntent.FLAG_CANCEL_CURRENT);
-            alarm.set(AlarmManager.RTC_WAKEUP, wakeTime, serviceIntent);
+    private void attemptSend() {
+        if (Pref.getBooleanDefaultFalse("cloud_storage_api_enable")
+                || Pref.getBooleanDefaultFalse("wear_sync")
+                || Pref.getBooleanDefaultFalse("cloud_storage_mongodb_enable")
+                || Pref.getBooleanDefaultFalse("cloud_storage_influxdb_enable")) {
+            synctoCloudDatabases(); // attempt to sync queues
+            startSyncService(6 * Constants.MINUTE_IN_MS); // set retry timer
         }
     }
 
-    public void syncToMongoDb() {
-        MongoSendTask task = new MongoSendTask(getApplicationContext());
+    private void synctoCloudDatabases() {
+        final UploaderTask task = new UploaderTask(getApplicationContext());
         task.executeOnExecutor(xdrip.executor);
+    }
+
+    public static void startSyncService(long delay) {
+        Log.d("SyncService", "static starting Sync service delay: " + delay);
+        if (delay == 0) {
+            xdrip.getAppContext().startService(new Intent(xdrip.getAppContext(), SyncService.class));
+        } else {
+            final PendingIntent serviceIntent = PendingIntent.getService(xdrip.getAppContext(), SYNC_QUEUE_RETRY_ID, new Intent(xdrip.getAppContext(), SyncService.class), PendingIntent.FLAG_CANCEL_CURRENT);
+            JoH.wakeUpIntent(xdrip.getAppContext(), delay, serviceIntent);
+        }
     }
 }

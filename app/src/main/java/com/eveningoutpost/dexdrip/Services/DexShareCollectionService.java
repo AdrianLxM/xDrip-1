@@ -23,9 +23,7 @@ import android.os.IBinder;
 import android.os.PowerManager;
 import android.preference.PreferenceManager;
 
-import com.eveningoutpost.dexdrip.Models.JoH;
-import com.eveningoutpost.dexdrip.Models.UserError.Log;
-
+import com.eveningoutpost.dexdrip.Home;
 import com.eveningoutpost.dexdrip.ImportedLibraries.dexcom.ReadDataShare;
 import com.eveningoutpost.dexdrip.ImportedLibraries.dexcom.records.CalRecord;
 import com.eveningoutpost.dexdrip.ImportedLibraries.dexcom.records.EGVRecord;
@@ -33,12 +31,13 @@ import com.eveningoutpost.dexdrip.ImportedLibraries.dexcom.records.SensorRecord;
 import com.eveningoutpost.dexdrip.Models.ActiveBluetoothDevice;
 import com.eveningoutpost.dexdrip.Models.BgReading;
 import com.eveningoutpost.dexdrip.Models.Calibration;
+import com.eveningoutpost.dexdrip.Models.JoH;
 import com.eveningoutpost.dexdrip.Models.Sensor;
+import com.eveningoutpost.dexdrip.Models.UserError.Log;
 import com.eveningoutpost.dexdrip.UtilityModels.CollectionServiceStarter;
 import com.eveningoutpost.dexdrip.UtilityModels.DexShareAttributes;
 import com.eveningoutpost.dexdrip.UtilityModels.ForegroundServiceStarter;
 import com.eveningoutpost.dexdrip.UtilityModels.HM10Attributes;
-import com.eveningoutpost.dexdrip.utils.BgToSpeech;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Calendar;
@@ -101,7 +100,7 @@ public class DexShareCollectionService extends Service {
     public boolean shouldDisconnect = false;
     public boolean share2 = false;
     public Service service;
-    private BgToSpeech bgToSpeech;
+    //private BgToSpeech bgToSpeech;
 
     private long lastHeartbeat = 0;
     private int heartbeatCount = 0;
@@ -121,7 +120,7 @@ public class DexShareCollectionService extends Service {
         registerReceiver(mPairReceiver, bondintent);
         prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
         listenForChangeInSettings();
-        bgToSpeech = BgToSpeech.setupTTS(getApplicationContext()); //keep reference to not being garbage collected
+        //bgToSpeech = BgToSpeech.setupTTS(getApplicationContext()); //keep reference to not being garbage collected
         instance = JoH.ts();
     }
 
@@ -133,11 +132,7 @@ public class DexShareCollectionService extends Service {
         Log.d(TAG, "onStartCommand");
         try {
 
-            if (android.os.Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT) {
-                stopSelf();
-                return START_NOT_STICKY;
-            }
-            if (CollectionServiceStarter.isBTShare(getApplicationContext())) {
+            if (shouldServiceRun(getApplicationContext())) {
                 setFailoverTimer();
             } else {
                 stopSelf();
@@ -155,14 +150,30 @@ public class DexShareCollectionService extends Service {
         return START_STICKY;
     }
 
+    private static boolean shouldServiceRun(Context context) {
+        if (android.os.Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR2) return false;
+        final boolean result = CollectionServiceStarter.isBTShare(context) && !Home.get_forced_wear();
+        Log.d(TAG, "shouldServiceRun() returning: " + result);
+        return result;
+    }
+
     @Override
     public void onDestroy() {
         super.onDestroy();
         close();
-        setRetryTimer();
+        if (shouldServiceRun(getApplicationContext())) {//Android killed service
+            setRetryTimer();
+        }
+        else {//onDestroy triggered by CollectionServiceStart.stopBtService
+            if (pendingIntent != null) {
+                Log.d(TAG, "onDestroy stop Alarm serviceIntent");
+                AlarmManager alarm = (AlarmManager) getSystemService(ALARM_SERVICE);
+                alarm.cancel(pendingIntent);
+            }
+        }
         foregroundServiceStarter.stop();
         unregisterReceiver(mPairReceiver);
-        BgToSpeech.tearDownTTS();
+        //BgToSpeech.tearDownTTS();
         Log.i(TAG, "SERVICE STOPPED");
     }
 
@@ -201,7 +212,7 @@ public class DexShareCollectionService extends Service {
             if (pendingIntent != null)
                 alarm.cancel(pendingIntent);
             long wakeTime = calendar.getTimeInMillis() + retry_in;
-            pendingIntent = PendingIntent.getService(this, 0, new Intent(this, this.getClass()), 0);
+            pendingIntent = PendingIntent.getService(this, 0, new Intent(this, this.getClass()),  PendingIntent.FLAG_UPDATE_CURRENT);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 alarm.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, wakeTime, pendingIntent);
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
@@ -255,13 +266,19 @@ public class DexShareCollectionService extends Service {
                     mDeviceName = btDevice.name;
                     mDeviceAddress = btDevice.address;
                     mBluetoothAdapter = mBluetoothManager.getAdapter();
-                    if (mBluetoothAdapter.isEnabled() && mBluetoothAdapter.getRemoteDevice(mDeviceAddress) != null) {
-                        connect(mDeviceAddress);
-                        return;
-                    } else {
-                        Log.w(TAG, "Bluetooth is disabled or BT device cant be found");
-                        setRetryTimer();
-                        return;
+                    try {
+                        if (mBluetoothAdapter.isEnabled() && mBluetoothAdapter.getRemoteDevice(mDeviceAddress) != null) {
+                            connect(mDeviceAddress);
+                            return;
+                        } else {
+                            Log.w(TAG, "Bluetooth is disabled or BT device cant be found");
+                            setRetryTimer();
+                            return;
+                        }
+                    } catch (IllegalArgumentException e) {
+                        if (JoH.ratelimit("dex-share-error-log", 180)) {
+                            Log.wtf(TAG, "Error connecting: " + e);
+                        }
                     }
                 } else {
                     Log.w(TAG, "No bluetooth device to try and connect to");
